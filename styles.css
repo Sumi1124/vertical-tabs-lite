@@ -1,0 +1,159 @@
+.vt-root {
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+}
+
+.vt-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 8px 4px;
+  position: sticky;
+  top: 0;
+  background: inherit;
+  z-index: 1;
+}
+
+.vt-filter {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  font-size: var(--font-ui-small);
+}
+
+.vt-btn {
+  flex: 0 0 auto;
+}
+
+.vt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 6px 12px;
+}
+
+.vt-group {
+  margin: 10px 6px 4px;
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+
+.vt-group:first-child {
+  margin-top: 2px;
+}
+
+.vt-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 10px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: background-color 80ms ease;
+}
+
+.vt-tab:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.vt-tab.is-active {
+  background: var(--background-modifier-active-hover);
+  color: var(--text-normal);
+}
+
+/* accent bar on the active tab */
+.vt-tab.is-active::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--interactive-accent);
+}
+
+.vt-icon {
+  flex: 0 0 auto;
+  display: flex;
+  opacity: 0.8;
+}
+
+.vt-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.vt-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.vt-title,
+.vt-folder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vt-tab.is-active .vt-title {
+  font-weight: var(--font-semibold);
+}
+
+.vt-folder {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+
+.vt-action {
+  flex: 0 0 auto;
+  display: flex;
+  padding: 3px;
+  border-radius: var(--radius-s);
+  color: var(--text-faint);
+}
+
+.vt-action svg {
+  width: 14px;
+  height: 14px;
+}
+
+.vt-close {
+  opacity: 0;
+}
+
+.vt-tab:hover .vt-close,
+.vt-tab.is-active .vt-close {
+  opacity: 1;
+}
+
+.vt-pin {
+  color: var(--text-accent);
+}
+
+.vt-action:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.vt-empty {
+  padding: 16px 12px;
+  color: var(--text-faint);
+  text-align: center;
+  font-size: var(--font-ui-small);
+}
+
+/* Optional: hide Obsidian's native horizontal tab bar in the main editor area */
+body.vt-hide-native-tabs .workspace-split.mod-root .workspace-tab-header-container {
+  display: none;
+}

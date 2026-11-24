@@ -506,14 +506,14 @@ class VTSettingTab extends PluginSettingTab {
 
   async setControlValue(key: string, value: unknown): Promise<void> {
     if (!this.isKey(key)) return;
-    const next = { ...this.plugin.settings, [key]: value } as VTSettings;
+    const next: VTSettings = { ...this.plugin.settings, [key]: value };
     const sideChanged = key === "side" && next.side !== this.plugin.settings.side;
     this.plugin.settings = next;
     await this.plugin.saveSettings();
     if (sideChanged) await this.plugin.moveView();
   }
 
-  getSettingDefinitions(): SettingDefinitionItem<keyof VTSettings & string>[] {
+  getSettingDefinitions(): SettingDefinitionItem<keyof VTSettings>[] {
     return [
       {
         type: "group",

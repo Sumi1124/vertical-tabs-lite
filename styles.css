@@ -153,7 +153,11 @@
   font-size: var(--font-ui-small);
 }
 
-/* Optional: hide Obsidian's native horizontal tab bar in the main editor area */
-body.vt-hide-native-tabs .workspace-split.mod-root .workspace-tab-header-container {
+/* Optional: hide Obsidian's native horizontal tabs in the main editor area.
+   Only the tabs themselves are hidden; the bar stays so the window can still
+   be dragged and the right-sidebar toggle keeps working. */
+body.vt-hide-native-tabs .workspace-split.mod-root .workspace-tab-header-container-inner,
+body.vt-hide-native-tabs .workspace-split.mod-root .workspace-tab-header-new-tab,
+body.vt-hide-native-tabs .workspace-split.mod-root .workspace-tab-header-tab-list {
   display: none;
 }

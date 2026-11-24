@@ -2,9 +2,11 @@ import {
   App,
   ItemView,
   Menu,
+  Modal,
   Plugin,
   PluginSettingTab,
   Setting,
+  SettingDefinitionItem,
   TFile,
   WorkspaceLeaf,
   debounce,
@@ -67,6 +69,37 @@ function getGroups(app: App): WorkspaceLeaf[][] {
   return [...groups.values()];
 }
 
+/** Flatten one level of nesting (avoids Array.prototype.flat for older targets). */
+function flatten<T>(lists: T[][]): T[] {
+  const out: T[] = [];
+  for (const list of lists) out.push(...list);
+  return out;
+}
+
+/** Small yes/no dialog, used instead of window.confirm. */
+class ConfirmModal extends Modal {
+  constructor(app: App, private message: string, private onConfirm: () => void) {
+    super(app);
+  }
+
+  onOpen() {
+    this.setTitle("Vertical tabs");
+    this.contentEl.createEl("p", { text: this.message });
+    new Setting(this.contentEl)
+      .addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
+      .addButton((b) =>
+        b.setButtonText("Close tabs").setDestructive().setCta().onClick(() => {
+          this.close();
+          this.onConfirm();
+        })
+      );
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
 function leafFile(leaf: WorkspaceLeaf): TFile | null {
   const file = (leaf.view as { file?: TFile }).file;
   return file instanceof TFile ? file : null;
@@ -78,6 +111,7 @@ class VerticalTabsView extends ItemView {
   private toolbarEl!: HTMLElement;
   private listEl!: HTMLElement;
   private filterEl!: HTMLInputElement;
+  private newBtnEl!: HTMLElement;
   private query = "";
 
   constructor(leaf: WorkspaceLeaf, private plugin: VerticalTabsPlugin) {
@@ -117,6 +151,7 @@ class VerticalTabsView extends ItemView {
     });
 
     const newBtn = this.toolbarEl.createDiv({ cls: "vt-btn vt-new clickable-icon" });
+    this.newBtnEl = newBtn;
     setIcon(newBtn, "plus");
     setTooltip(newBtn, "New tab");
     newBtn.addEventListener("click", () => {
@@ -145,7 +180,7 @@ class VerticalTabsView extends ItemView {
   private orderedGroups(): WorkspaceLeaf[][] {
     const s = this.plugin.settings;
     let groups = getGroups(this.app);
-    if (!s.groupByPane) groups = [groups.flat()];
+    if (!s.groupByPane) groups = [flatten(groups)];
 
     return groups
       .map((leaves) => {
@@ -167,7 +202,7 @@ class VerticalTabsView extends ItemView {
   }
 
   private visibleLeaves(): WorkspaceLeaf[] {
-    return this.orderedGroups().flat();
+    return flatten(this.orderedGroups());
   }
 
   /** Apply settings that only change classes / visibility. */
@@ -178,9 +213,9 @@ class VerticalTabsView extends ItemView {
     this.contentEl.toggleClass("vt-no-icons", !s.showIcons);
     this.contentEl.toggleClass("vt-close-always", s.closeButton === "always");
     this.contentEl.toggleClass("vt-close-never", s.closeButton === "never");
-    this.filterEl.toggleClass("vt-hidden", !s.showFilter);
-    this.toolbarEl.querySelector(".vt-new")?.toggleClass("vt-hidden", !s.showNewTabButton);
-    this.toolbarEl.toggleClass("vt-hidden", !s.showFilter && !s.showNewTabButton);
+    this.filterEl.toggle(s.showFilter);
+    this.newBtnEl.toggle(s.showNewTabButton);
+    this.toolbarEl.toggle(s.showFilter || s.showNewTabButton);
     if (!s.showFilter && this.query) this.clearFilter();
   }
 
@@ -378,7 +413,7 @@ export default class VerticalTabsPlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       const current = this.app.workspace.getMostRecentLeaf();
       if (current) this.usedAt.set(current, Date.now());
-      if (this.settings.openOnStartup) this.activateView(false);
+      if (this.settings.openOnStartup) void this.activateView(false);
     });
   }
 
@@ -401,12 +436,16 @@ export default class VerticalTabsPlugin extends Plugin {
   }
 
   closeAll() {
-    if (this.settings.confirmCloseAll && !window.confirm("Close all unpinned tabs?")) return;
-    this.closeWhere(() => true);
+    const run = () => this.closeWhere(() => true);
+    if (this.settings.confirmCloseAll) {
+      new ConfirmModal(this.app, "Close all unpinned tabs?", run).open();
+    } else {
+      run();
+    }
   }
 
   cycle(dir: 1 | -1) {
-    const leaves = getGroups(this.app).flat();
+    const leaves = flatten(getGroups(this.app));
     if (leaves.length < 2) return;
     const current = this.app.workspace.getMostRecentLeaf();
     const idx = current ? leaves.indexOf(current) : -1;
@@ -441,7 +480,8 @@ export default class VerticalTabsPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const saved = ((await this.loadData()) ?? {}) as Partial<VTSettings>;
+    this.settings = { ...DEFAULT_SETTINGS, ...saved };
   }
 
   async saveSettings() {
@@ -456,74 +496,141 @@ class VTSettingTab extends PluginSettingTab {
     super(app, plugin);
   }
 
-  private toggle(el: HTMLElement, name: string, desc: string, key: keyof VTSettings) {
-    const s = this.plugin.settings as unknown as Record<string, unknown>;
-    new Setting(el).setName(name).setDesc(desc).addToggle((t) =>
-      t.setValue(s[key] as boolean).onChange(async (v) => {
-        s[key] = v;
-        await this.plugin.saveSettings();
-      })
-    );
+  private isKey(key: string): key is keyof VTSettings {
+    return key in DEFAULT_SETTINGS;
   }
 
-  private dropdown(
-    el: HTMLElement,
-    name: string,
-    desc: string,
-    key: keyof VTSettings,
-    options: Record<string, string>,
-    after?: () => Promise<void>
-  ) {
-    const s = this.plugin.settings as unknown as Record<string, unknown>;
-    new Setting(el).setName(name).setDesc(desc).addDropdown((d) =>
-      d.addOptions(options).setValue(s[key] as string).onChange(async (v) => {
-        s[key] = v;
-        await this.plugin.saveSettings();
-        if (after) await after();
-      })
-    );
+  getControlValue(key: string): unknown {
+    return this.isKey(key) ? this.plugin.settings[key] : undefined;
   }
 
-  display() {
-    const { containerEl: el } = this;
-    el.empty();
+  async setControlValue(key: string, value: unknown): Promise<void> {
+    if (!this.isKey(key)) return;
+    const next = { ...this.plugin.settings, [key]: value } as VTSettings;
+    const sideChanged = key === "side" && next.side !== this.plugin.settings.side;
+    this.plugin.settings = next;
+    await this.plugin.saveSettings();
+    if (sideChanged) await this.plugin.moveView();
+  }
 
-    new Setting(el).setName("Placement").setHeading();
-    this.dropdown(el, "Sidebar", "Which sidebar the tab list lives in.", "side",
-      { left: "Left", right: "Right" }, () => this.plugin.moveView());
-    this.toggle(el, "Open on startup", "Open the tab list when Obsidian starts.", "openOnStartup");
-    this.toggle(el, "Hide native tab bar",
-      "Hide the horizontal tabs above your notes, so the list is the only place tabs show.",
-      "hideNativeTabs");
-
-    new Setting(el).setName("Appearance").setHeading();
-    this.dropdown(el, "Density", "How much space each tab takes.", "density",
-      { compact: "Compact", comfortable: "Comfortable", spacious: "Spacious" });
-    this.toggle(el, "Show icons", "Show the file-type icon next to each tab.", "showIcons");
-    this.toggle(el, "Show folder", "Show each note's folder under its title.", "showFolder");
-    this.toggle(el, "Show filter box", "Show the search box above the list.", "showFilter");
-    this.toggle(el, "Show new tab button", "Show the + button next to the filter box.", "showNewTabButton");
-    this.dropdown(el, "Close button", "When to show the × on each tab.", "closeButton",
-      { hover: "On hover and active tab", always: "Always", never: "Never" });
-
-    new Setting(el).setName("Order and grouping").setHeading();
-    this.dropdown(el, "Sort tabs by", "Order of tabs in the list.", "sortBy",
-      { obsidian: "Obsidian's tab order", title: "Title (A–Z)", recent: "Recently used" });
-    this.toggle(el, "Pinned tabs first", "Keep pinned tabs at the top.", "pinnedFirst");
-    this.toggle(el, "Group by pane",
-      "When the editor is split, show a heading for each pane.", "groupByPane");
-
-    new Setting(el).setName("Behaviour").setHeading();
-    this.toggle(el, "Middle-click closes tab", "Close a tab by clicking it with the mouse wheel.", "middleClickClose");
-    this.toggle(el, "Confirm before closing all", "Ask before \"Close all\" closes your tabs.", "confirmCloseAll");
-
-    new Setting(el).addButton((b) =>
-      b.setButtonText("Reset to defaults").setWarning().onClick(async () => {
-        const keepHidden = this.plugin.settings.hideNativeTabs;
-        this.plugin.settings = { ...DEFAULT_SETTINGS, hideNativeTabs: keepHidden };
-        await this.plugin.saveSettings();
-        this.display();
-      })
-    );
+  getSettingDefinitions(): SettingDefinitionItem<keyof VTSettings & string>[] {
+    return [
+      {
+        type: "group",
+        heading: "Placement",
+        items: [
+          {
+            name: "Sidebar",
+            desc: "Which sidebar the tab list lives in.",
+            control: { type: "dropdown", key: "side", options: { left: "Left", right: "Right" } },
+          },
+          {
+            name: "Open on startup",
+            desc: "Open the tab list when Obsidian starts.",
+            control: { type: "toggle", key: "openOnStartup" },
+          },
+          {
+            name: "Hide native tab bar",
+            desc: "Hide the horizontal tabs above your notes, so the list is the only place tabs show.",
+            aliases: ["horizontal tabs", "tab strip"],
+            control: { type: "toggle", key: "hideNativeTabs" },
+          },
+        ],
+      },
+      {
+        type: "group",
+        heading: "Appearance",
+        items: [
+          {
+            name: "Density",
+            desc: "How much space each tab takes.",
+            control: {
+              type: "dropdown",
+              key: "density",
+              options: { compact: "Compact", comfortable: "Comfortable", spacious: "Spacious" },
+            },
+          },
+          {
+            name: "Show icons",
+            desc: "Show the file-type icon next to each tab.",
+            control: { type: "toggle", key: "showIcons" },
+          },
+          {
+            name: "Show folder",
+            desc: "Show each note's folder under its title.",
+            control: { type: "toggle", key: "showFolder" },
+          },
+          {
+            name: "Show filter box",
+            desc: "Show the search box above the list.",
+            control: { type: "toggle", key: "showFilter" },
+          },
+          {
+            name: "Show new tab button",
+            desc: "Show the + button next to the filter box.",
+            control: { type: "toggle", key: "showNewTabButton" },
+          },
+          {
+            name: "Close button",
+            desc: "When to show the × on each tab.",
+            control: {
+              type: "dropdown",
+              key: "closeButton",
+              options: { hover: "On hover and active tab", always: "Always", never: "Never" },
+            },
+          },
+        ],
+      },
+      {
+        type: "group",
+        heading: "Order and grouping",
+        items: [
+          {
+            name: "Sort tabs by",
+            desc: "Order of tabs in the list.",
+            control: {
+              type: "dropdown",
+              key: "sortBy",
+              options: { obsidian: "Obsidian's tab order", title: "Title (A–Z)", recent: "Recently used" },
+            },
+          },
+          {
+            name: "Pinned tabs first",
+            desc: "Keep pinned tabs at the top.",
+            control: { type: "toggle", key: "pinnedFirst" },
+          },
+          {
+            name: "Group by pane",
+            desc: "When the editor is split, show a heading for each pane.",
+            control: { type: "toggle", key: "groupByPane" },
+          },
+        ],
+      },
+      {
+        type: "group",
+        heading: "Behaviour",
+        items: [
+          {
+            name: "Middle-click closes tab",
+            desc: "Close a tab by clicking it with the mouse wheel.",
+            control: { type: "toggle", key: "middleClickClose" },
+          },
+          {
+            name: "Confirm before closing all",
+            desc: "Ask before \"Close all\" closes your tabs.",
+            control: { type: "toggle", key: "confirmCloseAll" },
+          },
+          {
+            name: "Reset to defaults",
+            desc: "Restore every option except \"Hide native tab bar\".",
+            action: () => {
+              const keepHidden = this.plugin.settings.hideNativeTabs;
+              this.plugin.settings = { ...DEFAULT_SETTINGS, hideNativeTabs: keepHidden };
+              void this.plugin.saveSettings().then(() => this.update());
+            },
+          },
+        ],
+      },
+    ];
   }
 }

@@ -1,5 +1,5 @@
-.vt-root {
-  padding: 0 !important;
+.workspace-leaf-content[data-type="vertical-tabs-lite"] .view-content.vt-root {
+  padding: 0;
   display: flex;
   flex-direction: column;
 }
@@ -154,10 +154,6 @@
 }
 
 /* ---- settings-driven variants ---- */
-.vt-hidden {
-  display: none !important;
-}
-
 .vt-compact .vt-list {
   gap: 0;
 }

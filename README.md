@@ -32,9 +32,21 @@ npm run dev     # rebuild on save
 
 ## Settings
 
-| Setting | Default | What it does |
-|---|---|---|
-| Sidebar | Left | Which sidebar the list lives in |
-| Show folder | On | Show each note's folder under its title |
-| Hide native tab bar | Off | Hide the horizontal tab headers in the editor |
-| Open on startup | On | Open the list when Obsidian starts |
+| Section | Setting | Default | What it does |
+|---|---|---|---|
+| Placement | Sidebar | Left | Which sidebar the list lives in |
+| | Open on startup | On | Open the list when Obsidian starts |
+| | Hide native tab bar | Off | Hide the horizontal tabs above your notes |
+| Appearance | Density | Comfortable | Compact, Comfortable or Spacious rows |
+| | Show icons | On | File-type icon next to each tab |
+| | Show folder | On | Each note's folder under its title |
+| | Show filter box | On | Search box above the list |
+| | Show new tab button | On | The **+** button next to the filter box |
+| | Close button | On hover | When to show the ×: on hover, always, or never |
+| Order and grouping | Sort tabs by | Obsidian's order | Obsidian's tab order, Title (A–Z), or Recently used |
+| | Pinned tabs first | On | Keep pinned tabs at the top |
+| | Group by pane | On | Heading per pane when the editor is split |
+| Behaviour | Middle-click closes tab | On | Close a tab with the mouse wheel |
+| | Confirm before closing all | On | Ask before "Close all" |
+
+A **Reset to defaults** button restores everything except "Hide native tab bar".

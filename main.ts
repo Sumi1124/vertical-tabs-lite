@@ -14,18 +14,46 @@ import {
 
 const VIEW_TYPE = "vertical-tabs-lite";
 
+type SortBy = "obsidian" | "title" | "recent";
+type CloseButton = "hover" | "always" | "never";
+type Density = "compact" | "comfortable" | "spacious";
+
 interface VTSettings {
-  hideNativeTabs: boolean;
-  showFolder: boolean;
+  // Placement
   side: "left" | "right";
   openOnStartup: boolean;
+  hideNativeTabs: boolean;
+  // Appearance
+  density: Density;
+  showIcons: boolean;
+  showFolder: boolean;
+  showFilter: boolean;
+  showNewTabButton: boolean;
+  closeButton: CloseButton;
+  // Order & grouping
+  sortBy: SortBy;
+  pinnedFirst: boolean;
+  groupByPane: boolean;
+  // Behaviour
+  middleClickClose: boolean;
+  confirmCloseAll: boolean;
 }
 
 const DEFAULT_SETTINGS: VTSettings = {
-  hideNativeTabs: false,
-  showFolder: true,
   side: "left",
   openOnStartup: true,
+  hideNativeTabs: false,
+  density: "comfortable",
+  showIcons: true,
+  showFolder: true,
+  showFilter: true,
+  showNewTabButton: true,
+  closeButton: "hover",
+  sortBy: "obsidian",
+  pinnedFirst: true,
+  groupByPane: true,
+  middleClickClose: true,
+  confirmCloseAll: true,
 };
 
 /** All tabs in the main editor area, grouped by their tab group (split pane). */
@@ -44,7 +72,10 @@ function leafFile(leaf: WorkspaceLeaf): TFile | null {
   return file instanceof TFile ? file : null;
 }
 
+const isPinned = (leaf: WorkspaceLeaf) => !!leaf.getViewState().pinned;
+
 class VerticalTabsView extends ItemView {
+  private toolbarEl!: HTMLElement;
   private listEl!: HTMLElement;
   private filterEl!: HTMLInputElement;
   private query = "";
@@ -67,8 +98,8 @@ class VerticalTabsView extends ItemView {
     this.contentEl.empty();
     this.contentEl.addClass("vt-root");
 
-    const toolbar = this.contentEl.createDiv({ cls: "vt-toolbar" });
-    this.filterEl = toolbar.createEl("input", {
+    this.toolbarEl = this.contentEl.createDiv({ cls: "vt-toolbar" });
+    this.filterEl = this.toolbarEl.createEl("input", {
       cls: "vt-filter",
       attr: { type: "search", placeholder: "Filter tabs…", spellcheck: "false" },
     });
@@ -81,13 +112,11 @@ class VerticalTabsView extends ItemView {
         const first = this.visibleLeaves()[0];
         if (first) this.app.workspace.setActiveLeaf(first, { focus: true });
       } else if (e.key === "Escape") {
-        this.filterEl.value = "";
-        this.query = "";
-        this.render();
+        this.clearFilter();
       }
     });
 
-    const newBtn = toolbar.createDiv({ cls: "vt-btn clickable-icon" });
+    const newBtn = this.toolbarEl.createDiv({ cls: "vt-btn vt-new clickable-icon" });
     setIcon(newBtn, "plus");
     setTooltip(newBtn, "New tab");
     newBtn.addEventListener("click", () => {
@@ -99,6 +128,12 @@ class VerticalTabsView extends ItemView {
     this.render();
   }
 
+  private clearFilter() {
+    if (this.filterEl) this.filterEl.value = "";
+    this.query = "";
+    this.render();
+  }
+
   private matches(leaf: WorkspaceLeaf): boolean {
     if (!this.query) return true;
     const file = leafFile(leaf);
@@ -106,38 +141,66 @@ class VerticalTabsView extends ItemView {
     return hay.includes(this.query);
   }
 
+  /** Leaves in display order, grouped (or one group when grouping is off). */
+  private orderedGroups(): WorkspaceLeaf[][] {
+    const s = this.plugin.settings;
+    let groups = getGroups(this.app);
+    if (!s.groupByPane) groups = [groups.flat()];
+
+    return groups
+      .map((leaves) => {
+        const visible = leaves.filter((l) => this.matches(l));
+        if (s.sortBy === "title") {
+          visible.sort((a, b) =>
+            a.getDisplayText().localeCompare(b.getDisplayText(), undefined, { numeric: true })
+          );
+        } else if (s.sortBy === "recent") {
+          visible.sort((a, b) => this.plugin.lastUsed(b) - this.plugin.lastUsed(a));
+        }
+        if (s.pinnedFirst) {
+          // stable sort keeps the chosen order within pinned / unpinned
+          visible.sort((a, b) => Number(isPinned(b)) - Number(isPinned(a)));
+        }
+        return visible;
+      })
+      .filter((g) => g.length > 0);
+  }
+
   private visibleLeaves(): WorkspaceLeaf[] {
-    return getGroups(this.app).flat().filter((l) => this.matches(l));
+    return this.orderedGroups().flat();
+  }
+
+  /** Apply settings that only change classes / visibility. */
+  private applyLayout() {
+    const s = this.plugin.settings;
+    this.contentEl.toggleClass("vt-compact", s.density === "compact");
+    this.contentEl.toggleClass("vt-spacious", s.density === "spacious");
+    this.contentEl.toggleClass("vt-no-icons", !s.showIcons);
+    this.contentEl.toggleClass("vt-close-always", s.closeButton === "always");
+    this.contentEl.toggleClass("vt-close-never", s.closeButton === "never");
+    this.filterEl.toggleClass("vt-hidden", !s.showFilter);
+    this.toolbarEl.querySelector(".vt-new")?.toggleClass("vt-hidden", !s.showNewTabButton);
+    this.toolbarEl.toggleClass("vt-hidden", !s.showFilter && !s.showNewTabButton);
+    if (!s.showFilter && this.query) this.clearFilter();
   }
 
   render() {
     if (!this.listEl) return;
+    this.applyLayout();
     this.listEl.empty();
 
     const active = this.app.workspace.getMostRecentLeaf();
-    const groups = getGroups(this.app);
-    const multi = groups.length > 1;
-    let shown = 0;
+    const groups = this.orderedGroups();
+    const showHeaders = this.plugin.settings.groupByPane && groups.length > 1;
 
     groups.forEach((leaves, gi) => {
-      const visible = leaves.filter((l) => this.matches(l));
-      if (!visible.length) return;
-
-      // Pinned tabs first, keep Obsidian's order otherwise.
-      visible.sort(
-        (a, b) => Number(!!b.getViewState().pinned) - Number(!!a.getViewState().pinned)
-      );
-
-      if (multi) {
+      if (showHeaders) {
         this.listEl.createDiv({ cls: "vt-group", text: `Pane ${gi + 1}` });
       }
-      for (const leaf of visible) {
-        this.renderTab(leaf, leaf === active);
-        shown++;
-      }
+      for (const leaf of leaves) this.renderTab(leaf, leaf === active);
     });
 
-    if (shown === 0) {
+    if (groups.length === 0) {
       this.listEl.createDiv({
         cls: "vt-empty",
         text: this.query ? "No matching tabs" : "No open notes",
@@ -146,7 +209,8 @@ class VerticalTabsView extends ItemView {
   }
 
   private renderTab(leaf: WorkspaceLeaf, isActive: boolean) {
-    const pinned = !!leaf.getViewState().pinned;
+    const s = this.plugin.settings;
+    const pinned = isPinned(leaf);
     const file = leafFile(leaf);
 
     const tab = this.listEl.createDiv({ cls: "vt-tab" });
@@ -154,13 +218,15 @@ class VerticalTabsView extends ItemView {
     tab.toggleClass("is-pinned", pinned);
     if (file) setTooltip(tab, file.path, { placement: "right" });
 
-    const icon = tab.createSpan({ cls: "vt-icon" });
-    setIcon(icon, leaf.view.getIcon());
+    if (s.showIcons) {
+      const icon = tab.createSpan({ cls: "vt-icon" });
+      setIcon(icon, leaf.view.getIcon());
+    }
 
     const text = tab.createDiv({ cls: "vt-text" });
     text.createDiv({ cls: "vt-title", text: leaf.getDisplayText() || "New tab" });
     const folder = file?.parent?.path;
-    if (this.plugin.settings.showFolder && folder && folder !== "/") {
+    if (s.showFolder && folder && folder !== "/") {
       text.createDiv({ cls: "vt-folder", text: folder });
     }
 
@@ -172,7 +238,7 @@ class VerticalTabsView extends ItemView {
         e.stopPropagation();
         leaf.setPinned(false);
       });
-    } else {
+    } else if (s.closeButton !== "never") {
       const close = tab.createSpan({ cls: "vt-action vt-close" });
       setIcon(close, "x");
       setTooltip(close, "Close");
@@ -186,7 +252,7 @@ class VerticalTabsView extends ItemView {
       this.app.workspace.setActiveLeaf(leaf, { focus: true });
     });
     tab.addEventListener("auxclick", (e) => {
-      if (e.button === 1 && !pinned) {
+      if (e.button === 1 && !pinned && s.middleClickClose) {
         e.preventDefault();
         leaf.detach();
       }
@@ -208,7 +274,6 @@ class VerticalTabsView extends ItemView {
       );
       menu.addItem((i) =>
         i.setTitle("Reveal in file explorer").setIcon("folder-open").onClick(() => {
-          // Uses the core file-explorer command; falls back silently if disabled.
           this.app.workspace.setActiveLeaf(leaf, { focus: true });
           (this.app as unknown as { commands: { executeCommandById(id: string): void } })
             .commands.executeCommandById("file-explorer:reveal-active-file");
@@ -228,12 +293,13 @@ class VerticalTabsView extends ItemView {
       i.setTitle("Close others").onClick(() => this.plugin.closeWhere((l) => l !== leaf))
     );
     menu.addItem((i) =>
-      i.setTitle("Close all").onClick(() => this.plugin.closeWhere(() => true))
+      i.setTitle("Close all").onClick(() => this.plugin.closeAll())
     );
     menu.showAtMouseEvent(e);
   }
 
   focusFilter() {
+    if (!this.plugin.settings.showFilter) return;
     this.filterEl?.focus();
     this.filterEl?.select();
   }
@@ -241,6 +307,11 @@ class VerticalTabsView extends ItemView {
 
 export default class VerticalTabsPlugin extends Plugin {
   settings!: VTSettings;
+  private usedAt = new WeakMap<WorkspaceLeaf, number>();
+
+  lastUsed(leaf: WorkspaceLeaf): number {
+    return this.usedAt.get(leaf) ?? 0;
+  }
 
   async onload() {
     await this.loadSettings();
@@ -280,11 +351,23 @@ export default class VerticalTabsPlugin extends Plugin {
         await this.saveSettings();
       },
     });
+    this.addCommand({
+      id: "close-all-tabs",
+      name: "Close all unpinned tabs",
+      callback: () => this.closeAll(),
+    });
 
     // Many workspace events fire in bursts; coalesce them into one redraw.
     const refresh = debounce(() => this.refreshViews(), 50, true);
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        if (leaf && leaf.getRoot() === this.app.workspace.rootSplit) {
+          this.usedAt.set(leaf, Date.now());
+        }
+        refresh();
+      })
+    );
     this.registerEvent(this.app.workspace.on("layout-change", refresh));
-    this.registerEvent(this.app.workspace.on("active-leaf-change", refresh));
     this.registerEvent(this.app.workspace.on("file-open", refresh));
     this.registerEvent(this.app.vault.on("rename", refresh));
     this.registerEvent(this.app.vault.on("delete", refresh));
@@ -293,6 +376,8 @@ export default class VerticalTabsPlugin extends Plugin {
     this.applyBodyClass();
 
     this.app.workspace.onLayoutReady(() => {
+      const current = this.app.workspace.getMostRecentLeaf();
+      if (current) this.usedAt.set(current, Date.now());
       if (this.settings.openOnStartup) this.activateView(false);
     });
   }
@@ -310,9 +395,14 @@ export default class VerticalTabsPlugin extends Plugin {
   closeWhere(pred: (leaf: WorkspaceLeaf) => boolean) {
     const toClose: WorkspaceLeaf[] = [];
     this.app.workspace.iterateRootLeaves((l) => {
-      if (pred(l) && !l.getViewState().pinned) toClose.push(l);
+      if (pred(l) && !isPinned(l)) toClose.push(l);
     });
     toClose.forEach((l) => l.detach());
+  }
+
+  closeAll() {
+    if (this.settings.confirmCloseAll && !window.confirm("Close all unpinned tabs?")) return;
+    this.closeWhere(() => true);
   }
 
   cycle(dir: 1 | -1) {
@@ -366,52 +456,74 @@ class VTSettingTab extends PluginSettingTab {
     super(app, plugin);
   }
 
+  private toggle(el: HTMLElement, name: string, desc: string, key: keyof VTSettings) {
+    const s = this.plugin.settings as unknown as Record<string, unknown>;
+    new Setting(el).setName(name).setDesc(desc).addToggle((t) =>
+      t.setValue(s[key] as boolean).onChange(async (v) => {
+        s[key] = v;
+        await this.plugin.saveSettings();
+      })
+    );
+  }
+
+  private dropdown(
+    el: HTMLElement,
+    name: string,
+    desc: string,
+    key: keyof VTSettings,
+    options: Record<string, string>,
+    after?: () => Promise<void>
+  ) {
+    const s = this.plugin.settings as unknown as Record<string, unknown>;
+    new Setting(el).setName(name).setDesc(desc).addDropdown((d) =>
+      d.addOptions(options).setValue(s[key] as string).onChange(async (v) => {
+        s[key] = v;
+        await this.plugin.saveSettings();
+        if (after) await after();
+      })
+    );
+  }
+
   display() {
-    const { containerEl } = this;
-    const s = this.plugin.settings;
-    containerEl.empty();
+    const { containerEl: el } = this;
+    el.empty();
 
-    new Setting(containerEl)
-      .setName("Sidebar")
-      .setDesc("Which sidebar the tab list lives in.")
-      .addDropdown((d) =>
-        d.addOptions({ left: "Left", right: "Right" })
-          .setValue(s.side)
-          .onChange(async (v) => {
-            s.side = v as VTSettings["side"];
-            await this.plugin.saveSettings();
-            await this.plugin.moveView();
-          })
-      );
+    new Setting(el).setName("Placement").setHeading();
+    this.dropdown(el, "Sidebar", "Which sidebar the tab list lives in.", "side",
+      { left: "Left", right: "Right" }, () => this.plugin.moveView());
+    this.toggle(el, "Open on startup", "Open the tab list when Obsidian starts.", "openOnStartup");
+    this.toggle(el, "Hide native tab bar",
+      "Hide the horizontal tabs above your notes, so the list is the only place tabs show.",
+      "hideNativeTabs");
 
-    new Setting(containerEl)
-      .setName("Show folder")
-      .setDesc("Show each note's folder under its title.")
-      .addToggle((t) =>
-        t.setValue(s.showFolder).onChange(async (v) => {
-          s.showFolder = v;
-          await this.plugin.saveSettings();
-        })
-      );
+    new Setting(el).setName("Appearance").setHeading();
+    this.dropdown(el, "Density", "How much space each tab takes.", "density",
+      { compact: "Compact", comfortable: "Comfortable", spacious: "Spacious" });
+    this.toggle(el, "Show icons", "Show the file-type icon next to each tab.", "showIcons");
+    this.toggle(el, "Show folder", "Show each note's folder under its title.", "showFolder");
+    this.toggle(el, "Show filter box", "Show the search box above the list.", "showFilter");
+    this.toggle(el, "Show new tab button", "Show the + button next to the filter box.", "showNewTabButton");
+    this.dropdown(el, "Close button", "When to show the × on each tab.", "closeButton",
+      { hover: "On hover and active tab", always: "Always", never: "Never" });
 
-    new Setting(containerEl)
-      .setName("Hide native tab bar")
-      .setDesc("Hide the horizontal tab headers in the main editor area.")
-      .addToggle((t) =>
-        t.setValue(s.hideNativeTabs).onChange(async (v) => {
-          s.hideNativeTabs = v;
-          await this.plugin.saveSettings();
-        })
-      );
+    new Setting(el).setName("Order and grouping").setHeading();
+    this.dropdown(el, "Sort tabs by", "Order of tabs in the list.", "sortBy",
+      { obsidian: "Obsidian's tab order", title: "Title (A–Z)", recent: "Recently used" });
+    this.toggle(el, "Pinned tabs first", "Keep pinned tabs at the top.", "pinnedFirst");
+    this.toggle(el, "Group by pane",
+      "When the editor is split, show a heading for each pane.", "groupByPane");
 
-    new Setting(containerEl)
-      .setName("Open on startup")
-      .setDesc("Open the vertical tabs pane when Obsidian starts.")
-      .addToggle((t) =>
-        t.setValue(s.openOnStartup).onChange(async (v) => {
-          s.openOnStartup = v;
-          await this.plugin.saveSettings();
-        })
-      );
+    new Setting(el).setName("Behaviour").setHeading();
+    this.toggle(el, "Middle-click closes tab", "Close a tab by clicking it with the mouse wheel.", "middleClickClose");
+    this.toggle(el, "Confirm before closing all", "Ask before \"Close all\" closes your tabs.", "confirmCloseAll");
+
+    new Setting(el).addButton((b) =>
+      b.setButtonText("Reset to defaults").setWarning().onClick(async () => {
+        const keepHidden = this.plugin.settings.hideNativeTabs;
+        this.plugin.settings = { ...DEFAULT_SETTINGS, hideNativeTabs: keepHidden };
+        await this.plugin.saveSettings();
+        this.display();
+      })
+    );
   }
 }

@@ -4,6 +4,7 @@
   "version": "0.2.0",
   "minAppVersion": "1.4.0",
   "description": "A vertical list of your open notes in the sidebar, like vertical tabs in a browser.",
-  "author": "You",
+  "author": "Sumi1124",
+  "authorUrl": "https://github.com/Sumi1124",
   "isDesktopOnly": false
 }

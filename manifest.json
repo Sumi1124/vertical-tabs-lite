@@ -6,5 +6,5 @@
   "description": "A vertical list of your open notes in the sidebar, like vertical tabs in a browser.",
   "author": "Sumi1124",
   "authorUrl": "https://github.com/Sumi1124",
-  "isDesktopOnly": false
+  "isDesktopOnly": true
 }

@@ -1,5 +1,7 @@
 import {
   App,
+  HoverParent,
+  HoverPopover,
   ItemView,
   Menu,
   Modal,
@@ -7,6 +9,7 @@ import {
   PluginSettingTab,
   Setting,
   SettingDefinitionItem,
+  TAbstractFile,
   TFile,
   WorkspaceLeaf,
   debounce,
@@ -19,6 +22,24 @@ const VIEW_TYPE = "vertical-tabs-lite";
 type SortBy = "obsidian" | "title" | "recent";
 type CloseButton = "hover" | "always" | "never";
 type Density = "compact" | "comfortable" | "spacious";
+type ActiveStyle = "tint" | "solid" | "bar";
+type LabelStyle = "dot" | "bar" | "tint";
+
+/** Colour names map to Obsidian's theme colours (var(--color-<name>)). */
+const COLORS = ["red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink"] as const;
+type ColorName = (typeof COLORS)[number];
+const COLOR_LABELS: Record<ColorName, string> = {
+  red: "Red",
+  orange: "Orange",
+  yellow: "Yellow",
+  green: "Green",
+  cyan: "Cyan",
+  blue: "Blue",
+  purple: "Purple",
+  pink: "Pink",
+};
+const isColor = (v: unknown): v is ColorName =>
+  typeof v === "string" && (COLORS as readonly string[]).includes(v);
 
 interface VTSettings {
   // Placement
@@ -31,13 +52,22 @@ interface VTSettings {
   showFolder: boolean;
   showFilter: boolean;
   showNewTabButton: boolean;
+  showTabCount: boolean;
   closeButton: CloseButton;
+  // Colours
+  activeStyle: ActiveStyle;
+  useCustomAccent: boolean;
+  accentColor: string;
+  labelStyle: LabelStyle;
+  colorByFolder: boolean;
+  tabColors: Record<string, ColorName>;
   // Order & grouping
   sortBy: SortBy;
   pinnedFirst: boolean;
   groupByPane: boolean;
   // Behaviour
   middleClickClose: boolean;
+  doubleClickNewTab: boolean;
   confirmCloseAll: boolean;
 }
 
@@ -50,11 +80,19 @@ const DEFAULT_SETTINGS: VTSettings = {
   showFolder: true,
   showFilter: true,
   showNewTabButton: true,
+  showTabCount: true,
   closeButton: "hover",
+  activeStyle: "tint",
+  useCustomAccent: false,
+  accentColor: "#7c5cff",
+  labelStyle: "dot",
+  colorByFolder: false,
+  tabColors: {},
   sortBy: "obsidian",
   pinnedFirst: true,
   groupByPane: true,
   middleClickClose: true,
+  doubleClickNewTab: true,
   confirmCloseAll: true,
 };
 
@@ -74,6 +112,20 @@ function flatten<T>(lists: T[][]): T[] {
   const out: T[] = [];
   for (const list of lists) out.push(...list);
   return out;
+}
+
+function leafFile(leaf: WorkspaceLeaf): TFile | null {
+  const file = (leaf.view as { file?: TFile }).file;
+  return file instanceof TFile ? file : null;
+}
+
+const isPinned = (leaf: WorkspaceLeaf) => !!leaf.getViewState().pinned;
+
+/** Stable colour for a folder path, so the same folder always gets the same colour. */
+function folderColor(path: string): ColorName {
+  let h = 0;
+  for (let i = 0; i < path.length; i++) h = (h * 31 + path.charCodeAt(i)) >>> 0;
+  return COLORS[h % COLORS.length];
 }
 
 /** Small yes/no dialog, used instead of window.confirm. */
@@ -100,14 +152,8 @@ class ConfirmModal extends Modal {
   }
 }
 
-function leafFile(leaf: WorkspaceLeaf): TFile | null {
-  const file = (leaf.view as { file?: TFile }).file;
-  return file instanceof TFile ? file : null;
-}
-
-const isPinned = (leaf: WorkspaceLeaf) => !!leaf.getViewState().pinned;
-
-class VerticalTabsView extends ItemView {
+class VerticalTabsView extends ItemView implements HoverParent {
+  hoverPopover: HoverPopover | null = null;
   private toolbarEl!: HTMLElement;
   private listEl!: HTMLElement;
   private filterEl!: HTMLInputElement;
@@ -150,16 +196,16 @@ class VerticalTabsView extends ItemView {
       }
     });
 
-    const newBtn = this.toolbarEl.createDiv({ cls: "vt-btn vt-new clickable-icon" });
-    this.newBtnEl = newBtn;
-    setIcon(newBtn, "plus");
-    setTooltip(newBtn, "New tab");
-    newBtn.addEventListener("click", () => {
-      const leaf = this.app.workspace.getLeaf("tab");
-      this.app.workspace.setActiveLeaf(leaf, { focus: true });
-    });
+    this.newBtnEl = this.toolbarEl.createDiv({ cls: "vt-btn vt-new clickable-icon" });
+    setIcon(this.newBtnEl, "plus");
+    setTooltip(this.newBtnEl, "New tab");
+    this.newBtnEl.addEventListener("click", () => this.plugin.newTab());
 
     this.listEl = this.contentEl.createDiv({ cls: "vt-list" });
+    // Double-click on empty space below the tabs opens a new tab, like a browser tab strip.
+    this.listEl.addEventListener("dblclick", (e) => {
+      if (e.target === this.listEl && this.plugin.settings.doubleClickNewTab) this.plugin.newTab();
+    });
     this.render();
   }
 
@@ -206,14 +252,25 @@ class VerticalTabsView extends ItemView {
   }
 
   /** Apply settings that only change classes / visibility. */
-  private applyLayout() {
+  private applyLayout(total: number) {
     const s = this.plugin.settings;
-    this.contentEl.toggleClass("vt-compact", s.density === "compact");
-    this.contentEl.toggleClass("vt-spacious", s.density === "spacious");
-    this.contentEl.toggleClass("vt-no-icons", !s.showIcons);
-    this.contentEl.toggleClass("vt-close-always", s.closeButton === "always");
-    this.contentEl.toggleClass("vt-close-never", s.closeButton === "never");
+    const root = this.contentEl;
+    root.toggleClass("vt-compact", s.density === "compact");
+    root.toggleClass("vt-spacious", s.density === "spacious");
+    root.toggleClass("vt-no-icons", !s.showIcons);
+    root.toggleClass("vt-close-always", s.closeButton === "always");
+    root.toggleClass("vt-close-never", s.closeButton === "never");
+    root.toggleClass("vt-active-solid", s.activeStyle === "solid");
+    root.toggleClass("vt-active-bar", s.activeStyle === "bar");
+    root.toggleClass("vt-label-style-bar", s.labelStyle === "bar");
+    root.toggleClass("vt-label-style-tint", s.labelStyle === "tint");
+    root.toggleClass("vt-custom-accent", s.useCustomAccent);
+    root.setCssProps({ "--vt-custom-accent": s.accentColor || DEFAULT_SETTINGS.accentColor });
+
     this.filterEl.toggle(s.showFilter);
+    this.filterEl.placeholder = s.showTabCount
+      ? `Filter ${total} ${total === 1 ? "tab" : "tabs"}…`
+      : "Filter tabs…";
     this.newBtnEl.toggle(s.showNewTabButton);
     this.toolbarEl.toggle(s.showFilter || s.showNewTabButton);
     if (!s.showFilter && this.query) this.clearFilter();
@@ -221,7 +278,8 @@ class VerticalTabsView extends ItemView {
 
   render() {
     if (!this.listEl) return;
-    this.applyLayout();
+    const total = flatten(getGroups(this.app)).length;
+    this.applyLayout(total);
     this.listEl.empty();
 
     const active = this.app.workspace.getMostRecentLeaf();
@@ -230,7 +288,11 @@ class VerticalTabsView extends ItemView {
 
     groups.forEach((leaves, gi) => {
       if (showHeaders) {
-        this.listEl.createDiv({ cls: "vt-group", text: `Pane ${gi + 1}` });
+        const header = this.listEl.createDiv({ cls: "vt-group" });
+        header.createSpan({ text: `Pane ${gi + 1}` });
+        if (this.plugin.settings.showTabCount) {
+          header.createSpan({ cls: "vt-group-count", text: String(leaves.length) });
+        }
       }
       for (const leaf of leaves) this.renderTab(leaf, leaf === active);
     });
@@ -247,11 +309,14 @@ class VerticalTabsView extends ItemView {
     const s = this.plugin.settings;
     const pinned = isPinned(leaf);
     const file = leafFile(leaf);
+    const color = file ? this.plugin.colorFor(file) : null;
 
     const tab = this.listEl.createDiv({ cls: "vt-tab" });
     tab.toggleClass("is-active", isActive);
     tab.toggleClass("is-pinned", pinned);
-    if (file) setTooltip(tab, file.path, { placement: "right" });
+    if (color) tab.addClass("has-label", `vt-label-${color}`);
+
+    if (color) tab.createSpan({ cls: "vt-label-dot" });
 
     if (s.showIcons) {
       const icon = tab.createSpan({ cls: "vt-icon" });
@@ -292,7 +357,39 @@ class VerticalTabsView extends ItemView {
         leaf.detach();
       }
     });
+    // Page preview on hover (uses the core "Page preview" plugin and its Mod-key setting).
+    if (file) {
+      tab.addEventListener("mouseover", (event) => {
+        this.app.workspace.trigger("hover-link", {
+          event,
+          source: VIEW_TYPE,
+          hoverParent: this,
+          targetEl: tab,
+          linktext: file.path,
+        });
+      });
+    }
     tab.addEventListener("contextmenu", (e) => this.openMenu(e, leaf, pinned, file));
+  }
+
+  private openColorMenu(at: { x: number; y: number }, file: TFile) {
+    const current = this.plugin.settings.tabColors[file.path];
+    const menu = new Menu();
+    for (const c of COLORS) {
+      menu.addItem((i) =>
+        i
+          .setTitle(COLOR_LABELS[c])
+          .setIcon("circle")
+          .setChecked(current === c)
+          .onClick(() => void this.plugin.setTabColor(file, c))
+      );
+    }
+    menu.addSeparator();
+    menu.addItem((i) =>
+      i.setTitle("No colour").setIcon("circle-off").setChecked(!current)
+        .onClick(() => void this.plugin.setTabColor(file, null))
+    );
+    menu.showAtPosition(at);
   }
 
   private openMenu(e: MouseEvent, leaf: WorkspaceLeaf, pinned: boolean, file: TFile | null) {
@@ -302,21 +399,35 @@ class VerticalTabsView extends ItemView {
         .onClick(() => leaf.setPinned(!pinned))
     );
     if (file) {
+      const at = { x: e.clientX, y: e.clientY };
+      menu.addItem((i) =>
+        i.setTitle("Colour…").setIcon("palette").onClick(() => this.openColorMenu(at, file))
+      );
+      menu.addSeparator();
+      menu.addItem((i) =>
+        i.setTitle("Duplicate tab").setIcon("copy-plus").onClick(() =>
+          void this.app.workspace.getLeaf("tab").openFile(file)
+        )
+      );
       menu.addItem((i) =>
         i.setTitle("Open to the right").setIcon("separator-vertical").onClick(() =>
-          this.app.workspace.getLeaf("split", "vertical").openFile(file)
+          void this.app.workspace.getLeaf("split", "vertical").openFile(file)
+        )
+      );
+      menu.addItem((i) =>
+        i.setTitle("Open in new window").setIcon("picture-in-picture-2").onClick(() =>
+          void this.app.workspace.getLeaf("window").openFile(file)
         )
       );
       menu.addItem((i) =>
         i.setTitle("Reveal in file explorer").setIcon("folder-open").onClick(() => {
           this.app.workspace.setActiveLeaf(leaf, { focus: true });
-          (this.app as unknown as { commands: { executeCommandById(id: string): void } })
-            .commands.executeCommandById("file-explorer:reveal-active-file");
+          this.plugin.runCommand("file-explorer:reveal-active-file");
         })
       );
       menu.addItem((i) =>
         i.setTitle("Copy path").setIcon("copy").onClick(() =>
-          navigator.clipboard.writeText(file.path)
+          void navigator.clipboard.writeText(file.path)
         )
       );
     }
@@ -328,9 +439,25 @@ class VerticalTabsView extends ItemView {
       i.setTitle("Close others").onClick(() => this.plugin.closeWhere((l) => l !== leaf))
     );
     menu.addItem((i) =>
-      i.setTitle("Close all").onClick(() => this.plugin.closeAll())
+      i.setTitle("Close tabs below").onClick(() => {
+        const order = this.visibleLeaves();
+        const idx = order.indexOf(leaf);
+        const below = new Set(order.slice(idx + 1));
+        this.plugin.closeWhere((l) => below.has(l));
+      })
+    );
+    menu.addItem((i) => i.setTitle("Close all").onClick(() => this.plugin.closeAll()));
+    menu.addItem((i) =>
+      i.setTitle("Reopen closed tab").setIcon("undo-2").onClick(() =>
+        this.plugin.runCommand("workspace:undo-close-pane")
+      )
     );
     menu.showAtMouseEvent(e);
+  }
+
+  /** Tabs in the order shown in the list (used by "Go to tab N"). */
+  displayOrder(): WorkspaceLeaf[] {
+    return this.visibleLeaves();
   }
 
   focusFilter() {
@@ -348,17 +475,46 @@ export default class VerticalTabsPlugin extends Plugin {
     return this.usedAt.get(leaf) ?? 0;
   }
 
+  colorFor(file: TFile): ColorName | null {
+    const own = this.settings.tabColors[file.path];
+    if (own) return own;
+    if (this.settings.colorByFolder) {
+      const folder = file.parent?.path;
+      if (folder && folder !== "/") return folderColor(folder);
+    }
+    return null;
+  }
+
+  async setTabColor(file: TFile, color: ColorName | null) {
+    const next = { ...this.settings.tabColors };
+    if (color) next[file.path] = color;
+    else delete next[file.path];
+    this.settings.tabColors = next;
+    await this.saveSettings();
+  }
+
+  runCommand(id: string) {
+    (this.app as unknown as { commands: { executeCommandById(id: string): boolean } })
+      .commands.executeCommandById(id);
+  }
+
+  newTab() {
+    const leaf = this.app.workspace.getLeaf("tab");
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
+
   async onload() {
     await this.loadSettings();
 
     this.registerView(VIEW_TYPE, (leaf) => new VerticalTabsView(leaf, this));
+    this.registerHoverLinkSource(VIEW_TYPE, { display: "Vertical Tabs Lite", defaultMod: true });
 
-    this.addRibbonIcon("panel-left", "Open vertical tabs", () => this.activateView());
+    this.addRibbonIcon("panel-left", "Open vertical tabs", () => void this.activateView());
 
     this.addCommand({
       id: "open-vertical-tabs",
       name: "Open vertical tabs",
-      callback: () => this.activateView(),
+      callback: () => void this.activateView(),
     });
     this.addCommand({
       id: "filter-tabs",
@@ -368,15 +524,32 @@ export default class VerticalTabsPlugin extends Plugin {
         view?.focusFilter();
       },
     });
+    this.addCommand({ id: "next-tab", name: "Go to next tab", callback: () => this.cycle(1) });
+    this.addCommand({ id: "previous-tab", name: "Go to previous tab", callback: () => this.cycle(-1) });
+    for (let n = 1; n <= 9; n++) {
+      this.addCommand({
+        id: `go-to-tab-${n}`,
+        name: n === 9 ? "Go to last tab" : `Go to tab ${n}`,
+        callback: () => this.goTo(n),
+      });
+    }
     this.addCommand({
-      id: "next-tab",
-      name: "Go to next tab",
-      callback: () => this.cycle(1),
+      id: "toggle-pin",
+      name: "Pin or unpin current tab",
+      callback: () => {
+        const leaf = this.app.workspace.getMostRecentLeaf();
+        if (leaf) leaf.setPinned(!isPinned(leaf));
+      },
     });
     this.addCommand({
-      id: "previous-tab",
-      name: "Go to previous tab",
-      callback: () => this.cycle(-1),
+      id: "set-tab-colour",
+      name: "Set colour of current tab",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file) return false;
+        if (!checking) new ColorPickerModal(this.app, this, file).open();
+        return true;
+      },
     });
     this.addCommand({
       id: "toggle-native-tabs",
@@ -404,8 +577,18 @@ export default class VerticalTabsPlugin extends Plugin {
     );
     this.registerEvent(this.app.workspace.on("layout-change", refresh));
     this.registerEvent(this.app.workspace.on("file-open", refresh));
-    this.registerEvent(this.app.vault.on("rename", refresh));
-    this.registerEvent(this.app.vault.on("delete", refresh));
+    this.registerEvent(
+      this.app.vault.on("rename", (file: TAbstractFile, oldPath: string) => {
+        void this.moveColor(oldPath, file.path);
+        refresh();
+      })
+    );
+    this.registerEvent(
+      this.app.vault.on("delete", (file: TAbstractFile) => {
+        void this.moveColor(file.path, null);
+        refresh();
+      })
+    );
 
     this.addSettingTab(new VTSettingTab(this.app, this));
     this.applyBodyClass();
@@ -421,9 +604,20 @@ export default class VerticalTabsPlugin extends Plugin {
     document.body.removeClass("vt-hide-native-tabs");
   }
 
+  /** Keep a tab's colour when its file is renamed; forget it when deleted. */
+  private async moveColor(from: string, to: string | null) {
+    const color = this.settings.tabColors[from];
+    if (!color) return;
+    const next = { ...this.settings.tabColors };
+    delete next[from];
+    if (to) next[to] = color;
+    this.settings.tabColors = next;
+    await this.saveSettings();
+  }
+
   refreshViews() {
     for (const l of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      (l.view as VerticalTabsView).render();
+      if (l.view instanceof VerticalTabsView) l.view.render();
     }
   }
 
@@ -444,8 +638,21 @@ export default class VerticalTabsPlugin extends Plugin {
     }
   }
 
+  /** Tabs in the order the list shows them (falls back to Obsidian's order). */
+  private orderedLeaves(): WorkspaceLeaf[] {
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    return view instanceof VerticalTabsView ? view.displayOrder() : flatten(getGroups(this.app));
+  }
+
+  goTo(n: number) {
+    const leaves = this.orderedLeaves();
+    if (!leaves.length) return;
+    const target = n === 9 ? leaves[leaves.length - 1] : leaves[n - 1];
+    if (target) this.app.workspace.setActiveLeaf(target, { focus: true });
+  }
+
   cycle(dir: 1 | -1) {
-    const leaves = flatten(getGroups(this.app));
+    const leaves = this.orderedLeaves();
     if (leaves.length < 2) return;
     const current = this.app.workspace.getMostRecentLeaf();
     const idx = current ? leaves.indexOf(current) : -1;
@@ -482,12 +689,50 @@ export default class VerticalTabsPlugin extends Plugin {
   async loadSettings() {
     const saved = ((await this.loadData()) ?? {}) as Partial<VTSettings>;
     this.settings = { ...DEFAULT_SETTINGS, ...saved };
+    // Drop any colour values this version doesn't know about.
+    const colors: Record<string, ColorName> = {};
+    for (const [path, c] of Object.entries(this.settings.tabColors ?? {})) {
+      if (isColor(c)) colors[path] = c;
+    }
+    this.settings.tabColors = colors;
   }
 
   async saveSettings() {
     await this.saveData(this.settings);
     this.applyBodyClass();
     this.refreshViews();
+  }
+}
+
+/** Quick colour picker for the "Set colour of current tab" command. */
+class ColorPickerModal extends Modal {
+  constructor(app: App, private plugin: VerticalTabsPlugin, private file: TFile) {
+    super(app);
+  }
+
+  onOpen() {
+    this.setTitle(`Colour for "${this.file.basename}"`);
+    const current = this.plugin.settings.tabColors[this.file.path];
+    const grid = this.contentEl.createDiv({ cls: "vt-swatches" });
+    const pick = (c: ColorName | null) => {
+      void this.plugin.setTabColor(this.file, c);
+      this.close();
+    };
+    for (const c of COLORS) {
+      const sw = grid.createEl("button", { cls: `vt-swatch vt-label-${c}`, attr: { "aria-label": COLOR_LABELS[c] } });
+      sw.toggleClass("is-selected", current === c);
+      setTooltip(sw, COLOR_LABELS[c]);
+      sw.addEventListener("click", () => pick(c));
+    }
+    const none = grid.createEl("button", { cls: "vt-swatch vt-swatch-none", attr: { "aria-label": "No colour" } });
+    setIcon(none, "circle-off");
+    setTooltip(none, "No colour");
+    none.toggleClass("is-selected", !current);
+    none.addEventListener("click", () => pick(null));
+  }
+
+  onClose() {
+    this.contentEl.empty();
   }
 }
 
@@ -511,9 +756,11 @@ class VTSettingTab extends PluginSettingTab {
     this.plugin.settings = next;
     await this.plugin.saveSettings();
     if (sideChanged) await this.plugin.moveView();
+    if (key === "useCustomAccent") this.refreshDomState();
   }
 
   getSettingDefinitions(): SettingDefinitionItem<keyof VTSettings>[] {
+    const colorCount = Object.keys(this.plugin.settings.tabColors).length;
     return [
       {
         type: "group",
@@ -571,12 +818,73 @@ class VTSettingTab extends PluginSettingTab {
             control: { type: "toggle", key: "showNewTabButton" },
           },
           {
+            name: "Show tab count",
+            desc: "Show how many tabs are open, in the filter box and next to each pane heading.",
+            control: { type: "toggle", key: "showTabCount" },
+          },
+          {
             name: "Close button",
             desc: "When to show the × on each tab.",
             control: {
               type: "dropdown",
               key: "closeButton",
               options: { hover: "On hover and active tab", always: "Always", never: "Never" },
+            },
+          },
+        ],
+      },
+      {
+        type: "group",
+        heading: "Colours",
+        items: [
+          {
+            name: "Active tab style",
+            desc: "How the tab you're on stands out.",
+            aliases: ["highlight", "selected"],
+            control: {
+              type: "dropdown",
+              key: "activeStyle",
+              options: { tint: "Soft tint", solid: "Solid colour", bar: "Side bar only" },
+            },
+          },
+          {
+            name: "Custom accent colour",
+            desc: "Use your own colour for the active tab instead of your theme's accent colour.",
+            aliases: ["color", "accent"],
+            control: { type: "toggle", key: "useCustomAccent" },
+          },
+          {
+            name: "Accent colour",
+            desc: "Colour for the active tab.",
+            aliases: ["color"],
+            visible: () => this.plugin.settings.useCustomAccent,
+            control: { type: "color", key: "accentColor", defaultValue: DEFAULT_SETTINGS.accentColor },
+          },
+          {
+            name: "Colour label style",
+            desc: "How a tab's colour shows. Right-click a tab and choose Colour… to give it one.",
+            aliases: ["color", "label"],
+            control: {
+              type: "dropdown",
+              key: "labelStyle",
+              options: { dot: "Dot", bar: "Side stripe", tint: "Background tint" },
+            },
+          },
+          {
+            name: "Colour by folder",
+            desc: "Give every tab a colour based on its folder. Colours you pick yourself still win.",
+            aliases: ["color", "folder"],
+            control: { type: "toggle", key: "colorByFolder" },
+          },
+          {
+            name: "Clear tab colours",
+            desc: colorCount
+              ? `Remove the colours you've given ${colorCount} ${colorCount === 1 ? "note" : "notes"}.`
+              : "You haven't given any tabs a colour yet.",
+            disabled: () => Object.keys(this.plugin.settings.tabColors).length === 0,
+            action: () => {
+              this.plugin.settings.tabColors = {};
+              void this.plugin.saveSettings().then(() => this.update());
             },
           },
         ],
@@ -616,16 +924,21 @@ class VTSettingTab extends PluginSettingTab {
             control: { type: "toggle", key: "middleClickClose" },
           },
           {
+            name: "Double-click opens new tab",
+            desc: "Double-click the empty space below your tabs to open a new one.",
+            control: { type: "toggle", key: "doubleClickNewTab" },
+          },
+          {
             name: "Confirm before closing all",
             desc: "Ask before \"Close all\" closes your tabs.",
             control: { type: "toggle", key: "confirmCloseAll" },
           },
           {
             name: "Reset to defaults",
-            desc: "Restore every option except \"Hide native tab bar\".",
+            desc: "Restore every option except \"Hide native tab bar\" and your tab colours.",
             action: () => {
-              const keepHidden = this.plugin.settings.hideNativeTabs;
-              this.plugin.settings = { ...DEFAULT_SETTINGS, hideNativeTabs: keepHidden };
+              const { hideNativeTabs, tabColors } = this.plugin.settings;
+              this.plugin.settings = { ...DEFAULT_SETTINGS, hideNativeTabs, tabColors };
               void this.plugin.saveSettings().then(() => this.update());
             },
           },

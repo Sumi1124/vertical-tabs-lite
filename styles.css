@@ -1,4 +1,6 @@
 .workspace-leaf-content[data-type="vertical-tabs-lite"] .view-content.vt-root {
+  --vt-accent: var(--interactive-accent);
+  --vt-on-accent: var(--text-on-accent);
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -34,6 +36,8 @@
 }
 
 .vt-group {
+  display: flex;
+  justify-content: space-between;
   margin: 10px 6px 4px;
   font-size: var(--font-ui-smaller);
   font-weight: var(--font-semibold);
@@ -44,6 +48,11 @@
 
 .vt-group:first-child {
   margin-top: 2px;
+}
+
+.vt-group-count {
+  font-weight: var(--font-normal);
+  font-variant-numeric: tabular-nums;
 }
 
 .vt-tab {
@@ -63,8 +72,9 @@
   color: var(--text-normal);
 }
 
+/* Active tab: "Soft tint" (default) */
 .vt-tab.is-active {
-  background: var(--background-modifier-active-hover);
+  background: color-mix(in srgb, var(--vt-accent) 16%, transparent);
   color: var(--text-normal);
 }
 
@@ -77,7 +87,7 @@
   bottom: 6px;
   width: 3px;
   border-radius: 2px;
-  background: var(--interactive-accent);
+  background: var(--vt-accent);
 }
 
 .vt-icon {
@@ -176,6 +186,106 @@
 
 .vt-close-always .vt-close {
   opacity: 1;
+}
+
+/* ---- colours ---- */
+.vt-root.vt-custom-accent {
+  --vt-accent: var(--vt-custom-accent);
+  --vt-on-accent: #fff;
+}
+
+/* Active tab: "Solid colour" */
+.vt-active-solid .vt-tab.is-active {
+  background: var(--vt-accent);
+  color: var(--vt-on-accent);
+}
+.vt-active-solid .vt-tab.is-active::before {
+  display: none;
+}
+.vt-active-solid .vt-tab.is-active .vt-folder,
+.vt-active-solid .vt-tab.is-active .vt-action,
+.vt-active-solid .vt-tab.is-active .vt-pin {
+  color: var(--vt-on-accent);
+  opacity: 0.85;
+}
+
+/* Active tab: "Side bar only" */
+.vt-active-bar .vt-tab.is-active {
+  background: transparent;
+}
+.vt-active-bar .vt-tab.is-active:hover {
+  background: var(--background-modifier-hover);
+}
+
+/* Colour labels: the colour name sets --vt-label */
+.vt-label-red { --vt-label: var(--color-red); }
+.vt-label-orange { --vt-label: var(--color-orange); }
+.vt-label-yellow { --vt-label: var(--color-yellow); }
+.vt-label-green { --vt-label: var(--color-green); }
+.vt-label-cyan { --vt-label: var(--color-cyan); }
+.vt-label-blue { --vt-label: var(--color-blue); }
+.vt-label-purple { --vt-label: var(--color-purple); }
+.vt-label-pink { --vt-label: var(--color-pink); }
+
+/* Label style: "Dot" (default) */
+.vt-label-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vt-label);
+}
+
+/* Label style: "Side stripe" */
+.vt-label-style-bar .vt-label-dot {
+  display: none;
+}
+.vt-label-style-bar .vt-tab.has-label {
+  box-shadow: inset 4px 0 0 var(--vt-label);
+}
+.vt-label-style-bar .vt-tab.has-label.is-active::before {
+  left: 7px;
+}
+
+/* Label style: "Background tint" */
+.vt-label-style-tint .vt-label-dot {
+  display: none;
+}
+.vt-label-style-tint .vt-tab.has-label {
+  background: color-mix(in srgb, var(--vt-label) 14%, transparent);
+}
+.vt-label-style-tint .vt-tab.has-label:hover {
+  background: color-mix(in srgb, var(--vt-label) 22%, transparent);
+}
+.vt-label-style-tint .vt-tab.has-label.is-active {
+  background: color-mix(in srgb, var(--vt-label) 30%, transparent);
+}
+
+/* Colour picker modal */
+.vt-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 4px 0 8px;
+}
+.vt-swatch {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--vt-label);
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+.vt-swatch.is-selected {
+  border-color: var(--text-normal);
+}
+.vt-swatch-none {
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Optional: hide Obsidian's native horizontal tabs in the main editor area.

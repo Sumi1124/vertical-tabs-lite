@@ -15,6 +15,7 @@ Requires Obsidian 1.13.0 or newer · Desktop only · [MIT licence](LICENSE)
 - **Make it yours.** Density, text size, corner roundness, active-tab style, what each tab is called, and what the line under it says.
 - **Find tabs fast.** Filter as you type, move with ↑ ↓, open with Enter, or use the quick switcher.
 - **Never lose a tab.** Recently closed tabs stay one click away, and saved tab sets bring a whole group back at once.
+- **Plays nicely with other sidebar panels.** Slim rows and a "share sidebar" mode put the list under Notebook Navigator or the file explorer, so you see both at once.
 - **Hide Obsidian's top tab bar** if you want this list to be the only place tabs show.
 
 ## Colour labels
@@ -25,11 +26,15 @@ Right-click a tab and choose **Colour…**, or run the command **Set colour of c
 
 ## Make it yours
 
-Choose compact, comfortable or spacious rows. Set text size (80–130%) and corner roundness. Pick how the active tab stands out: soft tint, solid colour, or side bar only.
+Choose slim, compact, comfortable or spacious rows. Set text size (80–130%) and corner roundness. Pick how the active tab stands out: soft tint, solid colour, or side bar only.
 
 ![The same tab list in compact, comfortable and spacious density, larger text, square corners, and three active-tab styles](docs/styles.png)
 
 Each tab can be called by its **file name**, the note's **frontmatter `title`**, or its **first heading**. The second line can show the **folder**, the **full path**, **when it was last edited** ("Edited 5 minutes ago"), or nothing.
+
+## Use it with Notebook Navigator
+
+Turn on **Share sidebar with other panels** and set **Density** to **Slim**. The tab list then sits under Notebook Navigator (or the file explorer) in the same sidebar, one short line per tab, and you can drag the divider to resize.
 
 ## Find, reopen and save tabs
 
@@ -52,9 +57,10 @@ Everything is in **Settings → Vertical Tabs Lite**, and every option also show
 | Section | Setting | Default | What it does |
 |---|---|---|---|
 | Placement | Sidebar | Left | Which sidebar the list lives in |
+| | Share sidebar with other panels | Off | Show the list below the sidebar's other panels (e.g. Notebook Navigator) instead of as its own tab |
 | | Open on startup | On | Open the list when Obsidian starts |
 | | Hide native tab bar | Off | Hide the horizontal tabs above your notes |
-| Appearance | Density | Comfortable | Compact, Comfortable or Spacious rows |
+| Appearance | Density | Comfortable | Slim, Compact, Comfortable or Spacious rows |
 | | Show icons | On | File-type icon next to each tab |
 | | Tab title | File name | File name, Frontmatter title, or First heading |
 | | Second line | Folder | Folder, Full path, Last edited, or Nothing |

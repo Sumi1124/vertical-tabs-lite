@@ -209,6 +209,51 @@
   display: none;
 }
 
+/* Slim: thinnest rows, for sharing the sidebar with other panels */
+.vt-slim .vt-toolbar {
+  padding: 4px 4px 2px;
+}
+.vt-slim .vt-filter {
+  height: 24px;
+  font-size: var(--font-ui-smaller);
+}
+.vt-slim .vt-list {
+  gap: 0;
+  padding: 2px 4px 6px;
+}
+.vt-slim .vt-group {
+  margin: 4px 2px 1px;
+  padding: 1px 4px;
+}
+.vt-slim .vt-tab {
+  gap: 6px;
+  padding: 1px 4px 1px 8px;
+  line-height: 1.2;
+  font-size: calc(var(--font-ui-smaller) * var(--vt-scale));
+}
+.vt-slim .vt-folder {
+  display: none;
+}
+.vt-slim .vt-icon svg {
+  width: 13px;
+  height: 13px;
+}
+.vt-slim .vt-action {
+  padding: 1px;
+}
+.vt-slim .vt-action svg {
+  width: 12px;
+  height: 12px;
+}
+.vt-slim .vt-label-dot {
+  width: 6px;
+  height: 6px;
+}
+.vt-slim .vt-tab.is-active::before {
+  top: 3px;
+  bottom: 3px;
+}
+
 .vt-spacious .vt-list {
   gap: 4px;
 }

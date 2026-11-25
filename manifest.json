@@ -1,7 +1,7 @@
 {
   "id": "vertical-tabs-lite",
   "name": "Vertical Tabs Lite",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "minAppVersion": "1.13.0",
   "description": "A vertical list of your open notes in the sidebar, like vertical tabs in a browser.",
   "author": "Sumi1124",

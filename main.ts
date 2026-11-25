@@ -25,7 +25,7 @@ type SortBy = "obsidian" | "title" | "recent" | "folder" | "modified";
 type TitleSource = "name" | "frontmatter" | "heading";
 type Subtitle = "folder" | "path" | "modified" | "none";
 type CloseButton = "hover" | "always" | "never";
-type Density = "compact" | "comfortable" | "spacious";
+type Density = "slim" | "compact" | "comfortable" | "spacious";
 type ActiveStyle = "tint" | "solid" | "bar";
 type LabelStyle = "dot" | "bar" | "tint" | "text";
 
@@ -48,6 +48,7 @@ const isColor = (v: unknown): v is ColorName =>
 interface VTSettings {
   // Placement
   side: "left" | "right";
+  shareSidebar: boolean;
   openOnStartup: boolean;
   hideNativeTabs: boolean;
   // Appearance
@@ -88,6 +89,7 @@ interface VTSettings {
 
 const DEFAULT_SETTINGS: VTSettings = {
   side: "left",
+  shareSidebar: false,
   openOnStartup: true,
   hideNativeTabs: false,
   density: "comfortable",
@@ -325,6 +327,7 @@ class VerticalTabsView extends ItemView implements HoverParent {
   private applyLayout(total: number) {
     const s = this.plugin.settings;
     const root = this.contentEl;
+    root.toggleClass("vt-slim", s.density === "slim");
     root.toggleClass("vt-compact", s.density === "compact");
     root.toggleClass("vt-spacious", s.density === "spacious");
     root.toggleClass("vt-no-icons", !s.showIcons);
@@ -1020,8 +1023,8 @@ export default class VerticalTabsPlugin extends Plugin {
     if (!leaf) {
       const newLeaf =
         this.settings.side === "left"
-          ? workspace.getLeftLeaf(false)
-          : workspace.getRightLeaf(false);
+          ? workspace.getLeftLeaf(this.settings.shareSidebar)
+          : workspace.getRightLeaf(this.settings.shareSidebar);
       if (!newLeaf) return null;
       leaf = newLeaf;
       await leaf.setViewState({ type: VIEW_TYPE, active: reveal });
@@ -1193,7 +1196,9 @@ class VTSettingTab extends PluginSettingTab {
   async setControlValue(key: string, value: unknown): Promise<void> {
     if (!this.isKey(key)) return;
     const next: VTSettings = { ...this.plugin.settings, [key]: value };
-    const sideChanged = key === "side" && next.side !== this.plugin.settings.side;
+    const sideChanged =
+      (key === "side" && next.side !== this.plugin.settings.side) ||
+      (key === "shareSidebar" && next.shareSidebar !== this.plugin.settings.shareSidebar);
     this.plugin.settings = next;
     await this.plugin.saveSettings();
     if (sideChanged) await this.plugin.moveView();
@@ -1211,6 +1216,12 @@ class VTSettingTab extends PluginSettingTab {
             name: "Sidebar",
             desc: "Which sidebar the tab list lives in.",
             control: { type: "dropdown", key: "side", options: { left: "Left", right: "Right" } },
+          },
+          {
+            name: "Share sidebar with other panels",
+            desc: "Show the tab list below the sidebar's other panels (like Notebook Navigator or the file explorer) instead of as its own sidebar tab, so you can see both at once.",
+            aliases: ["split", "stack", "notebook navigator", "file explorer"],
+            control: { type: "toggle", key: "shareSidebar" },
           },
           {
             name: "Open on startup",
@@ -1235,7 +1246,7 @@ class VTSettingTab extends PluginSettingTab {
             control: {
               type: "dropdown",
               key: "density",
-              options: { compact: "Compact", comfortable: "Comfortable", spacious: "Spacious" },
+              options: { slim: "Slim", compact: "Compact", comfortable: "Comfortable", spacious: "Spacious" },
             },
           },
           {

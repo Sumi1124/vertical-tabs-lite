@@ -13,17 +13,20 @@ import {
   TFile,
   WorkspaceLeaf,
   debounce,
+  moment,
   setIcon,
   setTooltip,
 } from "obsidian";
 
 const VIEW_TYPE = "vertical-tabs-lite";
 
-type SortBy = "obsidian" | "title" | "recent";
+type SortBy = "obsidian" | "title" | "recent" | "folder" | "modified";
+type TitleSource = "name" | "frontmatter" | "heading";
+type Subtitle = "folder" | "path" | "modified" | "none";
 type CloseButton = "hover" | "always" | "never";
 type Density = "compact" | "comfortable" | "spacious";
 type ActiveStyle = "tint" | "solid" | "bar";
-type LabelStyle = "dot" | "bar" | "tint";
+type LabelStyle = "dot" | "bar" | "tint" | "text";
 
 /** Colour names map to Obsidian's theme colours (var(--color-<name>)). */
 const COLORS = ["red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink"] as const;
@@ -49,7 +52,12 @@ interface VTSettings {
   // Appearance
   density: Density;
   showIcons: boolean;
-  showFolder: boolean;
+  titleSource: TitleSource;
+  subtitle: Subtitle;
+  showExtension: boolean;
+  wrapTitles: boolean;
+  textScale: number;
+  cornerRadius: number;
   showFilter: boolean;
   showNewTabButton: boolean;
   showTabCount: boolean;
@@ -69,6 +77,7 @@ interface VTSettings {
   middleClickClose: boolean;
   doubleClickNewTab: boolean;
   confirmCloseAll: boolean;
+  tabLimit: number;
 }
 
 const DEFAULT_SETTINGS: VTSettings = {
@@ -77,7 +86,12 @@ const DEFAULT_SETTINGS: VTSettings = {
   hideNativeTabs: false,
   density: "comfortable",
   showIcons: true,
-  showFolder: true,
+  titleSource: "name",
+  subtitle: "folder",
+  showExtension: false,
+  wrapTitles: false,
+  textScale: 100,
+  cornerRadius: 6,
   showFilter: true,
   showNewTabButton: true,
   showTabCount: true,
@@ -94,6 +108,7 @@ const DEFAULT_SETTINGS: VTSettings = {
   middleClickClose: true,
   doubleClickNewTab: true,
   confirmCloseAll: true,
+  tabLimit: 0,
 };
 
 /** All tabs in the main editor area, grouped by their tab group (split pane). */
@@ -159,6 +174,7 @@ class VerticalTabsView extends ItemView implements HoverParent {
   private filterEl!: HTMLInputElement;
   private newBtnEl!: HTMLElement;
   private query = "";
+  private collapsed = new Set<number>();
 
   constructor(leaf: WorkspaceLeaf, private plugin: VerticalTabsPlugin) {
     super(leaf);
@@ -218,7 +234,7 @@ class VerticalTabsView extends ItemView implements HoverParent {
   private matches(leaf: WorkspaceLeaf): boolean {
     if (!this.query) return true;
     const file = leafFile(leaf);
-    const hay = (leaf.getDisplayText() + " " + (file?.path ?? "")).toLowerCase();
+    const hay = (this.plugin.titleFor(leaf) + " " + (file?.path ?? "")).toLowerCase();
     return hay.includes(this.query);
   }
 
@@ -231,10 +247,18 @@ class VerticalTabsView extends ItemView implements HoverParent {
     return groups
       .map((leaves) => {
         const visible = leaves.filter((l) => this.matches(l));
+        const byTitle = (a: WorkspaceLeaf, b: WorkspaceLeaf) =>
+          this.plugin.titleFor(a).localeCompare(this.plugin.titleFor(b), undefined, { numeric: true });
         if (s.sortBy === "title") {
-          visible.sort((a, b) =>
-            a.getDisplayText().localeCompare(b.getDisplayText(), undefined, { numeric: true })
-          );
+          visible.sort(byTitle);
+        } else if (s.sortBy === "folder") {
+          visible.sort((a, b) => {
+            const fa = leafFile(a)?.parent?.path ?? "";
+            const fb = leafFile(b)?.parent?.path ?? "";
+            return fa.localeCompare(fb, undefined, { numeric: true }) || byTitle(a, b);
+          });
+        } else if (s.sortBy === "modified") {
+          visible.sort((a, b) => (leafFile(b)?.stat.mtime ?? 0) - (leafFile(a)?.stat.mtime ?? 0));
         } else if (s.sortBy === "recent") {
           visible.sort((a, b) => this.plugin.lastUsed(b) - this.plugin.lastUsed(a));
         }
@@ -264,8 +288,14 @@ class VerticalTabsView extends ItemView implements HoverParent {
     root.toggleClass("vt-active-bar", s.activeStyle === "bar");
     root.toggleClass("vt-label-style-bar", s.labelStyle === "bar");
     root.toggleClass("vt-label-style-tint", s.labelStyle === "tint");
+    root.toggleClass("vt-label-style-text", s.labelStyle === "text");
+    root.toggleClass("vt-wrap", s.wrapTitles);
     root.toggleClass("vt-custom-accent", s.useCustomAccent);
-    root.setCssProps({ "--vt-custom-accent": s.accentColor || DEFAULT_SETTINGS.accentColor });
+    root.setCssProps({
+      "--vt-custom-accent": s.accentColor || DEFAULT_SETTINGS.accentColor,
+      "--vt-scale": String(s.textScale / 100),
+      "--vt-radius": `${s.cornerRadius}px`,
+    });
 
     this.filterEl.toggle(s.showFilter);
     this.filterEl.placeholder = s.showTabCount
@@ -287,12 +317,27 @@ class VerticalTabsView extends ItemView implements HoverParent {
     const showHeaders = this.plugin.settings.groupByPane && groups.length > 1;
 
     groups.forEach((leaves, gi) => {
+      const isCollapsed = showHeaders && this.collapsed.has(gi) && !this.query;
       if (showHeaders) {
         const header = this.listEl.createDiv({ cls: "vt-group" });
-        header.createSpan({ text: `Pane ${gi + 1}` });
+        header.toggleClass("is-collapsed", isCollapsed);
+        const chevron = header.createSpan({ cls: "vt-group-chevron" });
+        setIcon(chevron, "chevron-down");
+        header.createSpan({ cls: "vt-group-name", text: `Pane ${gi + 1}` });
         if (this.plugin.settings.showTabCount) {
           header.createSpan({ cls: "vt-group-count", text: String(leaves.length) });
         }
+        setTooltip(header, isCollapsed ? "Expand" : "Collapse");
+        header.addEventListener("click", () => {
+          if (this.collapsed.has(gi)) this.collapsed.delete(gi);
+          else this.collapsed.add(gi);
+          this.render();
+        });
+      }
+      if (isCollapsed) {
+        // Keep the active tab visible even when its pane is collapsed.
+        if (active && leaves.includes(active)) this.renderTab(active, true);
+        return;
       }
       for (const leaf of leaves) this.renderTab(leaf, leaf === active);
     });
@@ -324,11 +369,9 @@ class VerticalTabsView extends ItemView implements HoverParent {
     }
 
     const text = tab.createDiv({ cls: "vt-text" });
-    text.createDiv({ cls: "vt-title", text: leaf.getDisplayText() || "New tab" });
-    const folder = file?.parent?.path;
-    if (s.showFolder && folder && folder !== "/") {
-      text.createDiv({ cls: "vt-folder", text: folder });
-    }
+    text.createDiv({ cls: "vt-title", text: this.plugin.titleFor(leaf) || "New tab" });
+    const sub = file ? this.plugin.subtitleFor(file) : "";
+    if (sub) text.createDiv({ cls: "vt-folder", text: sub });
 
     if (pinned) {
       const pin = tab.createSpan({ cls: "vt-action vt-pin" });
@@ -475,6 +518,55 @@ export default class VerticalTabsPlugin extends Plugin {
     return this.usedAt.get(leaf) ?? 0;
   }
 
+  /** Title shown for a tab, following the "Tab title" setting. */
+  titleFor(leaf: WorkspaceLeaf): string {
+    const file = leafFile(leaf);
+    if (!file) return leaf.getDisplayText();
+    const s = this.settings;
+    const cache = this.app.metadataCache.getFileCache(file);
+    if (s.titleSource === "frontmatter") {
+      const fm: unknown = cache?.frontmatter?.["title"];
+      if (typeof fm === "string" && fm.trim()) return fm.trim();
+    } else if (s.titleSource === "heading") {
+      const h = cache?.headings?.[0]?.heading;
+      if (h && h.trim()) return h.trim();
+    }
+    return s.showExtension && file.extension !== "md" ? file.name : file.basename;
+  }
+
+  /** Second line under the title, following the "Second line" setting. */
+  subtitleFor(file: TFile): string {
+    switch (this.settings.subtitle) {
+      case "folder": {
+        const folder = file.parent?.path;
+        return folder && folder !== "/" ? folder : "";
+      }
+      case "path":
+        return file.path;
+      case "modified":
+        return `Edited ${moment(file.stat.mtime).fromNow()}`;
+      default:
+        return "";
+    }
+  }
+
+  /** Close the least recently used unpinned tabs when there are more than the limit. */
+  enforceTabLimit() {
+    const limit = this.settings.tabLimit;
+    if (!limit || limit < 1) return;
+    const leaves = flatten(getGroups(this.app));
+    let extra = leaves.length - limit;
+    if (extra <= 0) return;
+    const active = this.app.workspace.getMostRecentLeaf();
+    const candidates = leaves
+      .filter((l) => l !== active && !isPinned(l))
+      .sort((a, b) => this.lastUsed(a) - this.lastUsed(b));
+    for (const leaf of candidates) {
+      if (extra-- <= 0) break;
+      leaf.detach();
+    }
+  }
+
   colorFor(file: TFile): ColorName | null {
     const own = this.settings.tabColors[file.path];
     if (own) return own;
@@ -575,7 +667,24 @@ export default class VerticalTabsPlugin extends Plugin {
         refresh();
       })
     );
-    this.registerEvent(this.app.workspace.on("layout-change", refresh));
+    const limit = debounce(() => this.enforceTabLimit(), 300, true);
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        refresh();
+        limit();
+      })
+    );
+    this.registerEvent(
+      this.app.metadataCache.on("changed", () => {
+        if (this.settings.titleSource !== "name" || this.settings.subtitle === "modified") refresh();
+      })
+    );
+    // Keep "Edited 3 minutes ago" up to date.
+    this.registerInterval(
+      window.setInterval(() => {
+        if (this.settings.subtitle === "modified") this.refreshViews();
+      }, 60_000)
+    );
     this.registerEvent(this.app.workspace.on("file-open", refresh));
     this.registerEvent(
       this.app.vault.on("rename", (file: TAbstractFile, oldPath: string) => {
@@ -687,8 +796,14 @@ export default class VerticalTabsPlugin extends Plugin {
   }
 
   async loadSettings() {
-    const saved = ((await this.loadData()) ?? {}) as Partial<VTSettings>;
-    this.settings = { ...DEFAULT_SETTINGS, ...saved };
+    const saved = ((await this.loadData()) ?? {}) as Partial<VTSettings> & { showFolder?: boolean };
+    const { showFolder, ...rest } = saved;
+    this.settings = { ...DEFAULT_SETTINGS, ...rest };
+    // 0.4.0 and earlier had a "Show folder" toggle; carry it over to "Second line".
+    if (rest.subtitle === undefined && showFolder === false) this.settings.subtitle = "none";
+    this.settings.textScale = Math.min(130, Math.max(80, Number(this.settings.textScale) || 100));
+    this.settings.cornerRadius = Math.min(14, Math.max(0, Number(this.settings.cornerRadius) || 0));
+    this.settings.tabLimit = Math.max(0, Math.floor(Number(this.settings.tabLimit) || 0));
     // Drop any colour values this version doesn't know about.
     const colors: Record<string, ColorName> = {};
     for (const [path, c] of Object.entries(this.settings.tabColors ?? {})) {
@@ -701,6 +816,7 @@ export default class VerticalTabsPlugin extends Plugin {
     await this.saveData(this.settings);
     this.applyBodyClass();
     this.refreshViews();
+    this.enforceTabLimit();
   }
 }
 
@@ -803,9 +919,46 @@ class VTSettingTab extends PluginSettingTab {
             control: { type: "toggle", key: "showIcons" },
           },
           {
-            name: "Show folder",
-            desc: "Show each note's folder under its title.",
-            control: { type: "toggle", key: "showFolder" },
+            name: "Tab title",
+            desc: "What each tab is called. Falls back to the file name when a note has no title or heading.",
+            aliases: ["name", "frontmatter", "heading"],
+            control: {
+              type: "dropdown",
+              key: "titleSource",
+              options: { name: "File name", frontmatter: "Frontmatter title", heading: "First heading" },
+            },
+          },
+          {
+            name: "Second line",
+            desc: "What to show under each tab's title.",
+            aliases: ["subtitle", "folder", "path", "modified"],
+            control: {
+              type: "dropdown",
+              key: "subtitle",
+              options: { folder: "Folder", path: "Full path", modified: "Last edited", none: "Nothing" },
+            },
+          },
+          {
+            name: "Show file extensions",
+            desc: "Show extensions like .pdf or .canvas for files that aren't notes.",
+            control: { type: "toggle", key: "showExtension" },
+          },
+          {
+            name: "Wrap long titles",
+            desc: "Let long titles use more than one line instead of cutting them off.",
+            control: { type: "toggle", key: "wrapTitles" },
+          },
+          {
+            name: "Text size",
+            desc: "Size of the tab text, from 80% to 130% of normal.",
+            aliases: ["font", "zoom"],
+            control: { type: "slider", key: "textScale", min: 80, max: 130, step: 5 },
+          },
+          {
+            name: "Corner roundness",
+            desc: "How rounded each tab's corners are, from square (0) to very round (14).",
+            aliases: ["radius", "rounded"],
+            control: { type: "slider", key: "cornerRadius", min: 0, max: 14, step: 1 },
           },
           {
             name: "Show filter box",
@@ -867,7 +1020,7 @@ class VTSettingTab extends PluginSettingTab {
             control: {
               type: "dropdown",
               key: "labelStyle",
-              options: { dot: "Dot", bar: "Side stripe", tint: "Background tint" },
+              options: { dot: "Dot", bar: "Side stripe", tint: "Background tint", text: "Coloured title" },
             },
           },
           {
@@ -899,7 +1052,13 @@ class VTSettingTab extends PluginSettingTab {
             control: {
               type: "dropdown",
               key: "sortBy",
-              options: { obsidian: "Obsidian's tab order", title: "Title (A–Z)", recent: "Recently used" },
+              options: {
+                obsidian: "Obsidian's tab order",
+                title: "Title (A–Z)",
+                folder: "Folder",
+                recent: "Recently used",
+                modified: "Last edited",
+              },
             },
           },
           {
@@ -909,7 +1068,7 @@ class VTSettingTab extends PluginSettingTab {
           },
           {
             name: "Group by pane",
-            desc: "When the editor is split, show a heading for each pane.",
+            desc: "When the editor is split, show a heading for each pane. Click a heading to collapse it.",
             control: { type: "toggle", key: "groupByPane" },
           },
         ],
@@ -927,6 +1086,12 @@ class VTSettingTab extends PluginSettingTab {
             name: "Double-click opens new tab",
             desc: "Double-click the empty space below your tabs to open a new one.",
             control: { type: "toggle", key: "doubleClickNewTab" },
+          },
+          {
+            name: "Tab limit",
+            desc: "Close the least recently used tabs once more than this many are open. Pinned tabs are never closed. 0 means no limit.",
+            aliases: ["maximum", "max tabs", "auto close"],
+            control: { type: "number", key: "tabLimit", min: 0, max: 100, step: 1, placeholder: "0" },
           },
           {
             name: "Confirm before closing all",

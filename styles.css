@@ -1,6 +1,8 @@
 .workspace-leaf-content[data-type="vertical-tabs-lite"] .view-content.vt-root {
   --vt-accent: var(--interactive-accent);
   --vt-on-accent: var(--text-on-accent);
+  --vt-scale: 1;
+  --vt-radius: var(--radius-s);
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -37,8 +39,12 @@
 
 .vt-group {
   display: flex;
-  justify-content: space-between;
-  margin: 10px 6px 4px;
+  align-items: center;
+  gap: 4px;
+  margin: 10px 2px 4px;
+  padding: 2px 4px;
+  border-radius: var(--vt-radius);
+  cursor: pointer;
   font-size: var(--font-ui-smaller);
   font-weight: var(--font-semibold);
   text-transform: uppercase;
@@ -48,6 +54,27 @@
 
 .vt-group:first-child {
   margin-top: 2px;
+}
+
+.vt-group:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+
+.vt-group-chevron {
+  display: flex;
+  transition: transform 120ms ease;
+}
+.vt-group-chevron svg {
+  width: 12px;
+  height: 12px;
+}
+.vt-group.is-collapsed .vt-group-chevron {
+  transform: rotate(-90deg);
+}
+
+.vt-group-name {
+  flex: 1 1 auto;
 }
 
 .vt-group-count {
@@ -61,7 +88,8 @@
   align-items: center;
   gap: 8px;
   padding: 5px 6px 5px 10px;
-  border-radius: var(--radius-s);
+  border-radius: var(--vt-radius);
+  font-size: calc(var(--font-ui-medium) * var(--vt-scale));
   cursor: pointer;
   color: var(--text-muted);
   transition: background-color 80ms ease;
@@ -121,7 +149,7 @@
 }
 
 .vt-folder {
-  font-size: var(--font-ui-smaller);
+  font-size: calc(var(--font-ui-smaller) * var(--vt-scale));
   color: var(--text-faint);
 }
 
@@ -170,7 +198,7 @@
 .vt-compact .vt-tab {
   padding-top: 2px;
   padding-bottom: 2px;
-  font-size: var(--font-ui-small);
+  font-size: calc(var(--font-ui-small) * var(--vt-scale));
 }
 .vt-compact .vt-folder {
   display: none;
@@ -259,6 +287,20 @@
 }
 .vt-label-style-tint .vt-tab.has-label.is-active {
   background: color-mix(in srgb, var(--vt-label) 30%, transparent);
+}
+
+/* Label style: "Coloured title" */
+.vt-label-style-text .vt-label-dot {
+  display: none;
+}
+.vt-label-style-text .vt-tab.has-label .vt-title {
+  color: var(--vt-label);
+}
+
+/* Wrap long titles */
+.vt-wrap .vt-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Colour picker modal */

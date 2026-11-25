@@ -330,6 +330,42 @@
   justify-content: center;
 }
 
+/* Keyboard highlight while using the filter box */
+.vt-tab.is-highlighted {
+  outline: 2px solid var(--vt-accent);
+  outline-offset: -2px;
+}
+
+/* Recently closed */
+.vt-closed {
+  margin-top: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+.vt-closed-clear {
+  display: flex;
+  padding: 2px;
+  opacity: 0;
+}
+.vt-closed-clear svg {
+  width: 12px;
+  height: 12px;
+}
+.vt-closed-header:hover .vt-closed-clear {
+  opacity: 1;
+}
+.vt-closed-tab {
+  color: var(--text-faint);
+}
+.vt-closed-tab .vt-title {
+  font-style: italic;
+}
+
+/* Status bar tab count */
+.vt-status {
+  cursor: pointer;
+}
+
 /* Optional: hide Obsidian's native horizontal tabs in the main editor area.
    Only the tabs themselves are hidden; the bar stays so the window can still
    be dragged and the right-sidebar toggle keeps working. */

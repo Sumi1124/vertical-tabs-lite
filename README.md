@@ -19,13 +19,18 @@ Requires Obsidian 1.13.0 or newer. Desktop only.
   - **Second line**: folder, full path, when it was last edited, or nothing
   - **Text size** (80–130%) and **corner roundness** sliders
   - Wrap long titles onto more lines, show file extensions for non-notes
-- **Filter box**: type to narrow by title or folder, Enter opens the first match, Esc clears
+- **Filter box**: type to narrow by title or folder, ↑/↓ to move, Enter to open, Esc clears
 - **Tab count** in the filter box and next to each pane heading
 - **Page preview** on hover (hold Cmd/Ctrl, configurable in the core *Page preview* settings)
 - **Grouped by pane** when the editor is split; click a pane heading to collapse it
 - **Tab limit**: optionally close the least recently used tabs once you have more than a set number open (pinned tabs are kept)
+- **Recently closed**: tabs you closed this session are listed at the bottom; click one to reopen it
+- **Saved tab sets**: save the tabs you have open under a name and reopen them all later
+- **Quick switcher**: "Switch to open tab…" searches your open tabs by name
+- **Close duplicate tabs**: tidy up when the same note is open more than once
+- **Status bar count** of open tabs (optional)
 - **Pinned tabs** stay on top and are skipped by "Close others" / "Close all"
-- **Right-click menu**: Pin/Unpin, Colour…, Duplicate tab, Open to the right, Open in new window, Reveal in file explorer, Copy path, Close, Close others, Close tabs below, Close all, Reopen closed tab
+- **Right-click menu**: Pin/Unpin, Colour…, Duplicate tab, Open to the right, Open in new window, Reveal in file explorer, Copy path, Close, Close others, Close tabs below, Close duplicate tabs, Close all, Reopen closed tab, Save open tabs as a set…
 - **Middle-click** to close a tab, **+** button or **double-click** empty space for a new tab
 - **Commands** (bind to any hotkey):
   - Go to next tab / Go to previous tab
@@ -33,6 +38,10 @@ Requires Obsidian 1.13.0 or newer. Desktop only.
   - Pin or unpin current tab
   - Set colour of current tab
   - Filter open tabs
+  - Switch to open tab…
+  - Reopen last closed tab
+  - Close duplicate tabs
+  - Save open tabs as a set… / Open a saved tab set… / Delete a saved tab set…
   - Close all unpinned tabs
   - Toggle native tab bar
 - **Optional**: hide Obsidian's horizontal tab bar
@@ -79,11 +88,14 @@ npm run dev     # rebuild on save
 | Order and grouping | Sort tabs by | Obsidian's order | Obsidian's tab order, Title (A–Z), Folder, Recently used, or Last edited |
 | | Pinned tabs first | On | Keep pinned tabs at the top |
 | | Group by pane | On | Heading per pane when the editor is split (click to collapse) |
+| Extras | Show recently closed | On | List tabs closed this session at the bottom |
+| | How many recently closed | 5 | 1–15 |
+| | Tab count in status bar | Off | Number of open tabs in the status bar |
 | Behaviour | Middle-click closes tab | On | Close a tab with the mouse wheel |
 | | Double-click opens new tab | On | Double-click empty space below the tabs |
 | | Tab limit | 0 (off) | Close least recently used unpinned tabs beyond this many |
 | | Confirm before closing all | On | Ask before "Close all" |
 
-A **Reset to defaults** button restores everything except "Hide native tab bar" and your tab colours.
+A **Reset to defaults** button restores everything except "Hide native tab bar", your tab colours and your saved tab sets.
 
 Tab colours follow a note when you rename or move it, and are forgotten when you delete it.

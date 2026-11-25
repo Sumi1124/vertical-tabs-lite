@@ -1,5 +1,6 @@
 import {
   App,
+  FuzzySuggestModal,
   HoverParent,
   HoverPopover,
   ItemView,
@@ -9,6 +10,7 @@ import {
   PluginSettingTab,
   Setting,
   SettingDefinitionItem,
+  TextComponent,
   TAbstractFile,
   TFile,
   WorkspaceLeaf,
@@ -77,6 +79,11 @@ interface VTSettings {
   doubleClickNewTab: boolean;
   confirmCloseAll: boolean;
   tabLimit: number;
+  // Extras
+  showRecentlyClosed: boolean;
+  recentlyClosedCount: number;
+  showStatusBar: boolean;
+  tabSets: Record<string, string[]>;
 }
 
 const DEFAULT_SETTINGS: VTSettings = {
@@ -108,6 +115,10 @@ const DEFAULT_SETTINGS: VTSettings = {
   doubleClickNewTab: true,
   confirmCloseAll: true,
   tabLimit: 0,
+  showRecentlyClosed: true,
+  recentlyClosedCount: 5,
+  showStatusBar: false,
+  tabSets: {},
 };
 
 /** All tabs in the main editor area, grouped by their tab group (split pane). */
@@ -189,6 +200,10 @@ class VerticalTabsView extends ItemView implements HoverParent {
   private newBtnEl!: HTMLElement;
   private query = "";
   private collapsed = new Set<number>();
+  private closedCollapsed = false;
+  /** Keyboard highlight in the list while typing in the filter box (-1 = none). */
+  private highlight = -1;
+  private rendered: WorkspaceLeaf[] = [];
 
   constructor(leaf: WorkspaceLeaf, private plugin: VerticalTabsPlugin) {
     super(leaf);
@@ -215,14 +230,30 @@ class VerticalTabsView extends ItemView implements HoverParent {
     });
     this.filterEl.addEventListener("input", () => {
       this.query = this.filterEl.value.trim().toLowerCase();
+      this.highlight = this.query ? 0 : -1;
       this.render();
     });
     this.filterEl.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        const first = this.visibleLeaves()[0];
-        if (first) this.app.workspace.setActiveLeaf(first, { focus: true });
+      const count = this.rendered.length;
+      if (e.key === "ArrowDown" && count) {
+        e.preventDefault();
+        this.highlight = (this.highlight + 1) % count;
+        this.render();
+      } else if (e.key === "ArrowUp" && count) {
+        e.preventDefault();
+        this.highlight = this.highlight <= 0 ? count - 1 : this.highlight - 1;
+        this.render();
+      } else if (e.key === "Enter") {
+        const target = this.rendered[Math.max(0, this.highlight)];
+        if (target) this.app.workspace.setActiveLeaf(target, { focus: true });
       } else if (e.key === "Escape") {
         this.clearFilter();
+      }
+    });
+    this.filterEl.addEventListener("blur", () => {
+      if (this.highlight !== -1 && !this.query) {
+        this.highlight = -1;
+        this.render();
       }
     });
 
@@ -242,6 +273,7 @@ class VerticalTabsView extends ItemView implements HoverParent {
   private clearFilter() {
     if (this.filterEl) this.filterEl.value = "";
     this.query = "";
+    this.highlight = -1;
     this.render();
   }
 
@@ -325,6 +357,7 @@ class VerticalTabsView extends ItemView implements HoverParent {
     const total = flatten(getGroups(this.app)).length;
     this.applyLayout(total);
     this.listEl.empty();
+    this.rendered = [];
 
     const active = this.app.workspace.getMostRecentLeaf();
     const groups = this.orderedGroups();
@@ -362,6 +395,44 @@ class VerticalTabsView extends ItemView implements HoverParent {
         text: this.query ? "No matching tabs" : "No open notes",
       });
     }
+    if (this.highlight >= this.rendered.length) this.highlight = this.rendered.length - 1;
+
+    this.renderRecentlyClosed();
+  }
+
+  private renderRecentlyClosed() {
+    const s = this.plugin.settings;
+    if (!s.showRecentlyClosed || this.query) return;
+    const files = this.plugin.recentlyClosedFiles();
+    if (!files.length) return;
+
+    const section = this.listEl.createDiv({ cls: "vt-closed" });
+    const header = section.createDiv({ cls: "vt-group vt-closed-header" });
+    header.toggleClass("is-collapsed", this.closedCollapsed);
+    const chevron = header.createSpan({ cls: "vt-group-chevron" });
+    setIcon(chevron, "chevron-down");
+    header.createSpan({ cls: "vt-group-name", text: "Recently closed" });
+    const clear = header.createSpan({ cls: "vt-closed-clear clickable-icon" });
+    setIcon(clear, "x");
+    setTooltip(clear, "Clear list");
+    clear.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.plugin.clearRecentlyClosed();
+    });
+    header.addEventListener("click", () => {
+      this.closedCollapsed = !this.closedCollapsed;
+      this.render();
+    });
+    if (this.closedCollapsed) return;
+
+    for (const file of files) {
+      const row = section.createDiv({ cls: "vt-tab vt-closed-tab" });
+      setTooltip(row, `Reopen ${file.path}`, { placement: "right" });
+      if (s.showIcons) setIcon(row.createSpan({ cls: "vt-icon" }), "history");
+      const text = row.createDiv({ cls: "vt-text" });
+      text.createDiv({ cls: "vt-title", text: s.showExtension && file.extension !== "md" ? file.name : file.basename });
+      row.addEventListener("click", () => void this.plugin.reopen(file));
+    }
   }
 
   private renderTab(leaf: WorkspaceLeaf, isActive: boolean) {
@@ -372,6 +443,8 @@ class VerticalTabsView extends ItemView implements HoverParent {
 
     const tab = this.listEl.createDiv({ cls: "vt-tab" });
     tab.toggleClass("is-active", isActive);
+    tab.toggleClass("is-highlighted", this.rendered.length === this.highlight);
+    this.rendered.push(leaf);
     tab.toggleClass("is-pinned", pinned);
     if (color) tab.addClass("has-label", `vt-label-${color}`);
 
@@ -503,7 +576,14 @@ class VerticalTabsView extends ItemView implements HoverParent {
         this.plugin.closeWhere((l) => below.has(l));
       })
     );
+    menu.addItem((i) => i.setTitle("Close duplicate tabs").onClick(() => this.plugin.closeDuplicates()));
     menu.addItem((i) => i.setTitle("Close all").onClick(() => this.plugin.closeAll()));
+    menu.addSeparator();
+    menu.addItem((i) =>
+      i.setTitle("Save open tabs as a set…").setIcon("bookmark-plus").onClick(() =>
+        new SaveTabSetModal(this.app, this.plugin).open()
+      )
+    );
     menu.addItem((i) =>
       i.setTitle("Reopen closed tab").setIcon("undo-2").onClick(() =>
         this.plugin.runCommand("workspace:undo-close-pane")
@@ -527,6 +607,106 @@ class VerticalTabsView extends ItemView implements HoverParent {
 export default class VerticalTabsPlugin extends Plugin {
   settings!: VTSettings;
   private usedAt = new WeakMap<WorkspaceLeaf, number>();
+  /** Which file each open tab showed last time we looked, to spot closed tabs. */
+  private openPaths = new Map<WorkspaceLeaf, string>();
+  /** Paths of recently closed tabs, newest first (this session only). */
+  private closedPaths: string[] = [];
+  private statusEl: HTMLElement | null = null;
+
+  /** Remember files whose tabs disappeared since the last layout change. */
+  private trackClosedTabs() {
+    const now = new Map<WorkspaceLeaf, string>();
+    this.app.workspace.iterateRootLeaves((leaf) => {
+      const f = leafFile(leaf);
+      if (f) now.set(leaf, f.path);
+    });
+    const stillOpen = new Set(now.values());
+    for (const [leaf, path] of this.openPaths) {
+      if (!now.has(leaf) && !stillOpen.has(path)) {
+        this.closedPaths = [path, ...this.closedPaths.filter((p) => p !== path)].slice(0, 30);
+      }
+    }
+    // Anything open again is no longer "recently closed".
+    this.closedPaths = this.closedPaths.filter((p) => !stillOpen.has(p));
+    this.openPaths = now;
+  }
+
+  recentlyClosedFiles(): TFile[] {
+    const out: TFile[] = [];
+    for (const path of this.closedPaths) {
+      const f = this.app.vault.getFileByPath(path);
+      if (f) out.push(f);
+      if (out.length >= this.settings.recentlyClosedCount) break;
+    }
+    return out;
+  }
+
+  clearRecentlyClosed() {
+    this.closedPaths = [];
+    this.refreshViews();
+  }
+
+  async reopen(file: TFile) {
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.openFile(file);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
+
+  /** Close extra tabs that show the same file, keeping the active (or first) one. */
+  closeDuplicates() {
+    const active = this.app.workspace.getMostRecentLeaf();
+    const keep = new Map<string, WorkspaceLeaf>();
+    const leaves = flatten(getGroups(this.app));
+    for (const leaf of leaves) {
+      const f = leafFile(leaf);
+      if (f && leaf === active) keep.set(f.path, leaf);
+    }
+    for (const leaf of leaves) {
+      const f = leafFile(leaf);
+      if (f && !keep.has(f.path)) keep.set(f.path, leaf);
+    }
+    const keepers = new Set(keep.values());
+    this.closeWhere((l) => leafFile(l) !== null && !keepers.has(l));
+  }
+
+  /** Save the files open right now as a named tab set. */
+  async saveTabSet(name: string) {
+    const paths: string[] = [];
+    for (const leaf of flatten(getGroups(this.app))) {
+      const f = leafFile(leaf);
+      if (f && !paths.includes(f.path)) paths.push(f.path);
+    }
+    this.settings.tabSets = { ...this.settings.tabSets, [name]: paths };
+    await this.saveSettings();
+    return paths.length;
+  }
+
+  async openTabSet(name: string) {
+    const paths = this.settings.tabSets[name] ?? [];
+    let first: WorkspaceLeaf | null = null;
+    for (const path of paths) {
+      const f = this.app.vault.getFileByPath(path);
+      if (!f) continue;
+      const leaf = this.app.workspace.getLeaf("tab");
+      await leaf.openFile(f, { active: false });
+      first = first ?? leaf;
+    }
+    if (first) this.app.workspace.setActiveLeaf(first, { focus: true });
+  }
+
+  async deleteTabSet(name: string) {
+    const next = { ...this.settings.tabSets };
+    delete next[name];
+    this.settings.tabSets = next;
+    await this.saveSettings();
+  }
+
+  private updateStatusBar() {
+    if (!this.statusEl) return;
+    const count = flatten(getGroups(this.app)).length;
+    this.statusEl.setText(`${count} ${count === 1 ? "tab" : "tabs"}`);
+    this.statusEl.toggle(this.settings.showStatusBar);
+  }
 
   lastUsed(leaf: WorkspaceLeaf): number {
     return this.usedAt.get(leaf) ?? 0;
@@ -670,6 +850,53 @@ export default class VerticalTabsPlugin extends Plugin {
       name: "Close all unpinned tabs",
       callback: () => this.closeAll(),
     });
+    this.addCommand({
+      id: "close-duplicate-tabs",
+      name: "Close duplicate tabs",
+      callback: () => this.closeDuplicates(),
+    });
+    this.addCommand({
+      id: "switch-tab",
+      name: "Switch to open tab…",
+      callback: () => new TabSwitcherModal(this.app, this).open(),
+    });
+    this.addCommand({
+      id: "reopen-closed-tab",
+      name: "Reopen last closed tab",
+      checkCallback: (checking) => {
+        const file = this.recentlyClosedFiles()[0];
+        if (!file) return false;
+        if (!checking) void this.reopen(file);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "save-tab-set",
+      name: "Save open tabs as a set…",
+      callback: () => new SaveTabSetModal(this.app, this).open(),
+    });
+    this.addCommand({
+      id: "open-tab-set",
+      name: "Open a saved tab set…",
+      checkCallback: (checking) => {
+        if (!Object.keys(this.settings.tabSets).length) return false;
+        if (!checking) new TabSetPickerModal(this.app, this, "open").open();
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "delete-tab-set",
+      name: "Delete a saved tab set…",
+      checkCallback: (checking) => {
+        if (!Object.keys(this.settings.tabSets).length) return false;
+        if (!checking) new TabSetPickerModal(this.app, this, "delete").open();
+        return true;
+      },
+    });
+
+    this.statusEl = this.addStatusBarItem();
+    this.statusEl.addClass("vt-status");
+    this.statusEl.addEventListener("click", () => void this.activateView());
 
     // Many workspace events fire in bursts; coalesce them into one redraw.
     const refresh = debounce(() => this.refreshViews(), 50, true);
@@ -684,6 +911,7 @@ export default class VerticalTabsPlugin extends Plugin {
     const limit = debounce(() => this.enforceTabLimit(), 300, true);
     this.registerEvent(
       this.app.workspace.on("layout-change", () => {
+        this.trackClosedTabs();
         refresh();
         limit();
       })
@@ -719,6 +947,8 @@ export default class VerticalTabsPlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       const current = this.app.workspace.getMostRecentLeaf();
       if (current) this.usedAt.set(current, Date.now());
+      this.trackClosedTabs();
+      this.updateStatusBar();
       if (this.settings.openOnStartup) void this.activateView(false);
     });
   }
@@ -742,6 +972,7 @@ export default class VerticalTabsPlugin extends Plugin {
     for (const l of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
       if (l.view instanceof VerticalTabsView) l.view.render();
     }
+    this.updateStatusBar();
   }
 
   closeWhere(pred: (leaf: WorkspaceLeaf) => boolean) {
@@ -818,6 +1049,12 @@ export default class VerticalTabsPlugin extends Plugin {
     this.settings.textScale = Math.min(130, Math.max(80, Number(this.settings.textScale) || 100));
     this.settings.cornerRadius = Math.min(14, Math.max(0, Number(this.settings.cornerRadius) || 0));
     this.settings.tabLimit = Math.max(0, Math.floor(Number(this.settings.tabLimit) || 0));
+    this.settings.recentlyClosedCount = Math.min(15, Math.max(1, Number(this.settings.recentlyClosedCount) || 5));
+    const sets: Record<string, string[]> = {};
+    for (const [name, paths] of Object.entries(this.settings.tabSets ?? {})) {
+      if (Array.isArray(paths)) sets[name] = paths.filter((x): x is string => typeof x === "string");
+    }
+    this.settings.tabSets = sets;
     // Drop any colour values this version doesn't know about.
     const colors: Record<string, ColorName> = {};
     for (const [path, c] of Object.entries(this.settings.tabColors ?? {})) {
@@ -831,6 +1068,80 @@ export default class VerticalTabsPlugin extends Plugin {
     this.applyBodyClass();
     this.refreshViews();
     this.enforceTabLimit();
+  }
+}
+
+/** Fuzzy search across open tabs ("Switch to open tab…"). */
+class TabSwitcherModal extends FuzzySuggestModal<WorkspaceLeaf> {
+  constructor(app: App, private plugin: VerticalTabsPlugin) {
+    super(app);
+    this.setPlaceholder("Switch to an open tab…");
+  }
+  getItems(): WorkspaceLeaf[] {
+    return flatten(getGroups(this.app));
+  }
+  getItemText(leaf: WorkspaceLeaf): string {
+    const f = leafFile(leaf);
+    const title = this.plugin.titleFor(leaf);
+    return f && f.path !== `${title}.md` ? `${title} — ${f.path}` : title;
+  }
+  onChooseItem(leaf: WorkspaceLeaf): void {
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
+}
+
+/** Asks for a name, then saves the open tabs under it. */
+class SaveTabSetModal extends Modal {
+  private name = "";
+  constructor(app: App, private plugin: VerticalTabsPlugin) {
+    super(app);
+  }
+  onOpen() {
+    this.setTitle("Save open tabs as a set");
+    const existing = Object.keys(this.plugin.settings.tabSets);
+    let input: TextComponent | null = null;
+    const save = async () => {
+      const name = this.name.trim();
+      if (!name) return;
+      await this.plugin.saveTabSet(name);
+      this.close();
+    };
+    new Setting(this.contentEl)
+      .setName("Name")
+      .setDesc(existing.length ? `Using an existing name replaces that set. Saved: ${existing.join(", ")}` : "")
+      .addText((t) => {
+        input = t;
+        t.setPlaceholder("e.g. Biology revision").onChange((v) => (this.name = v));
+        t.inputEl.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") void save();
+        });
+      });
+    new Setting(this.contentEl)
+      .addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
+      .addButton((b) => b.setButtonText("Save").setCta().onClick(() => void save()));
+    window.setTimeout(() => input?.inputEl.focus(), 0);
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+/** Pick a saved tab set to open or delete. */
+class TabSetPickerModal extends FuzzySuggestModal<string> {
+  constructor(app: App, private plugin: VerticalTabsPlugin, private mode: "open" | "delete") {
+    super(app);
+    this.setPlaceholder(mode === "open" ? "Open a saved tab set…" : "Delete a saved tab set…");
+  }
+  getItems(): string[] {
+    return Object.keys(this.plugin.settings.tabSets).sort();
+  }
+  getItemText(name: string): string {
+    const n = this.plugin.settings.tabSets[name]?.length ?? 0;
+    return `${name} (${n} ${n === 1 ? "tab" : "tabs"})`;
+  }
+  onChooseItem(name: string): void {
+    if (this.mode === "open") void this.plugin.openTabSet(name);
+    else void this.plugin.deleteTabSet(name);
   }
 }
 
@@ -1089,6 +1400,37 @@ class VTSettingTab extends PluginSettingTab {
       },
       {
         type: "group",
+        heading: "Extras",
+        items: [
+          {
+            name: "Show recently closed",
+            desc: "List tabs you closed this session at the bottom, so you can click to reopen them.",
+            aliases: ["history", "reopen", "undo"],
+            control: { type: "toggle", key: "showRecentlyClosed" },
+          },
+          {
+            name: "How many recently closed",
+            desc: "Number of recently closed tabs to show (1–15).",
+            visible: () => this.plugin.settings.showRecentlyClosed,
+            control: { type: "slider", key: "recentlyClosedCount", min: 1, max: 15, step: 1 },
+          },
+          {
+            name: "Tab count in status bar",
+            desc: "Show how many tabs are open in the status bar at the bottom of the window. Click it to open the list.",
+            aliases: ["status bar"],
+            control: { type: "toggle", key: "showStatusBar" },
+          },
+          {
+            name: "Saved tab sets",
+            desc: Object.keys(this.plugin.settings.tabSets).length
+              ? `Saved: ${Object.keys(this.plugin.settings.tabSets).sort().join(", ")}. Use the commands "Open a saved tab set…" and "Delete a saved tab set…".`
+              : "Save your open tabs as a named set with the command \"Save open tabs as a set…\", then reopen them later.",
+            aliases: ["session", "workspace", "group"],
+          },
+        ],
+      },
+      {
+        type: "group",
         heading: "Behaviour",
         items: [
           {
@@ -1114,10 +1456,10 @@ class VTSettingTab extends PluginSettingTab {
           },
           {
             name: "Reset to defaults",
-            desc: "Restore every option except \"Hide native tab bar\" and your tab colours.",
+            desc: "Restore every option except \"Hide native tab bar\", your tab colours and your saved tab sets.",
             action: () => {
-              const { hideNativeTabs, tabColors } = this.plugin.settings;
-              this.plugin.settings = { ...DEFAULT_SETTINGS, hideNativeTabs, tabColors };
+              const { hideNativeTabs, tabColors, tabSets } = this.plugin.settings;
+              this.plugin.settings = { ...DEFAULT_SETTINGS, hideNativeTabs, tabColors, tabSets };
               void this.plugin.saveSettings().then(() => this.update());
             },
           },

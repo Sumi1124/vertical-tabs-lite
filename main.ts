@@ -13,7 +13,6 @@ import {
   TFile,
   WorkspaceLeaf,
   debounce,
-  moment,
   setIcon,
   setTooltip,
 } from "obsidian";
@@ -135,6 +134,21 @@ function leafFile(leaf: WorkspaceLeaf): TFile | null {
 }
 
 const isPinned = (leaf: WorkspaceLeaf) => !!leaf.getViewState().pinned;
+
+/** "just now", "5 minutes ago", "yesterday", "3 days ago", then a date. */
+function timeAgo(ms: number): string {
+  const sec = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+  if (sec < 45) return "just now";
+  const min = Math.round(sec / 60);
+  if (min < 60) return plural(min, "minute");
+  const hr = Math.round(min / 60);
+  if (hr < 24) return plural(hr, "hour");
+  const day = Math.round(hr / 24);
+  if (day === 1) return "yesterday";
+  if (day < 7) return plural(day, "day");
+  return new Date(ms).toLocaleDateString();
+}
 
 /** Stable colour for a folder path, so the same folder always gets the same colour. */
 function folderColor(path: string): ColorName {
@@ -544,7 +558,7 @@ export default class VerticalTabsPlugin extends Plugin {
       case "path":
         return file.path;
       case "modified":
-        return `Edited ${moment(file.stat.mtime).fromNow()}`;
+        return `Edited ${timeAgo(file.stat.mtime)}`;
       default:
         return "";
     }

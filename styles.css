@@ -1,8 +1,13 @@
-.workspace-leaf-content[data-type="vertical-tabs-lite"] .view-content.vt-root {
+/* Defaults for the plugin's CSS variables. Kept at low specificity so the
+   settings-driven rules below (e.g. .vt-custom-accent) can override them. */
+.vt-root {
   --vt-accent: var(--interactive-accent);
   --vt-on-accent: var(--text-on-accent);
   --vt-scale: 1;
   --vt-radius: var(--radius-s);
+}
+
+.workspace-leaf-content[data-type="vertical-tabs-lite"] .view-content.vt-root {
   padding: 0;
   display: flex;
   flex-direction: column;

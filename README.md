@@ -10,7 +10,8 @@ Requires Obsidian 1.13.0 or newer · Desktop only · [MIT licence](LICENSE)
 
 ## Highlights
 
-- **All your tabs at a glance.** One list of every open note, grouped by pane, with the one you're on highlighted.
+- **All your tabs at a glance.** One list of every open note, with the one you're on highlighted. Group it by pane, folder or colour.
+- **Your order, your names.** Drag tabs into the order you want, and give any tab its own name in the list.
 - **Colour labels.** Give any tab a colour, or colour every tab by its folder.
 - **Make it yours.** Density, text size, corner roundness, active-tab style, what each tab is called, and what the line under it says.
 - **Find tabs fast.** Filter as you type, move with ↑ ↓, open with Enter, or use the quick switcher.
@@ -35,6 +36,12 @@ Each tab can be called by its **file name**, the note's **frontmatter `title`**,
 ## Use it with Notebook Navigator
 
 Turn on **Share sidebar with other panels** and set **Density** to **Slim**. The tab list then sits under Notebook Navigator (or the file explorer) in the same sidebar, one short line per tab, and you can drag the divider to resize.
+
+## Organise the list
+
+- **Group by** pane, folder, colour, or nothing. Click a heading to collapse it.
+- **My order:** set *Sort tabs by* to *My order*, then drag tabs up and down the list. The order is remembered, even for notes you close and open again. It only changes this list, not Obsidian's own tab order.
+- **Rename tab…:** right-click a tab to give it a shorter or clearer name in the list. The file itself keeps its name. *Reset tab name* puts it back.
 
 ## Find, reopen and save tabs
 
@@ -78,9 +85,10 @@ Everything is in **Settings → Vertical Tabs Lite**, and every option also show
 | | Colour label style | Dot | Dot, Side stripe, Background tint, or Coloured title |
 | | Colour by folder | Off | Colour every tab by its folder; colours you pick still win |
 | | Clear tab colours | — | Remove all the colours you've picked |
-| Order and grouping | Sort tabs by | Obsidian's order | Obsidian's tab order, Title (A–Z), Folder, Recently used, or Last edited |
+| Order and grouping | Sort tabs by | Obsidian's order | Obsidian's tab order, My order (drag to rearrange), Title (A–Z), Folder, Recently used, or Last edited |
 | | Pinned tabs first | On | Keep pinned tabs at the top |
-| | Group by pane | On | Heading per pane when the editor is split (click to collapse) |
+| | Group by | Pane | Pane, Folder, Colour, or Nothing (click a heading to collapse it) |
+| | Forget my order | — | Clear the order you dragged tabs into |
 | Extras | Show recently closed | On | List tabs closed this session at the bottom |
 | | How many recently closed | 5 | 1–15 |
 | | Tab count in status bar | Off | Number of open tabs in the status bar |
@@ -89,7 +97,7 @@ Everything is in **Settings → Vertical Tabs Lite**, and every option also show
 | | Tab limit | 0 (off) | Close least recently used unpinned tabs beyond this many |
 | | Confirm before closing all | On | Ask before "Close all" |
 
-**Reset to defaults** restores everything except "Hide native tab bar", your tab colours and your saved tab sets.
+**Reset to defaults** restores everything except "Hide native tab bar" and things you've set per tab: colours, names, your order and saved tab sets.
 
 </details>
 
@@ -99,7 +107,7 @@ Everything is in **Settings → Vertical Tabs Lite**, and every option also show
 - **Double-click** the empty space below the tabs (or press **+**) for a new tab.
 - **Hold Cmd/Ctrl and hover** to preview a note (uses the core *Page preview* plugin).
 - **Click a pane heading** to collapse that pane.
-- **Right-click** a tab for: Pin/Unpin, Colour…, Duplicate tab, Open to the right, Open in new window, Reveal in file explorer, Copy path, Close, Close others, Close tabs below, Close duplicate tabs, Close all, Reopen closed tab, Save open tabs as a set…
+- **Right-click** a tab for: Pin/Unpin, Colour…, Rename tab…, Duplicate tab, Open to the right, Open in new window, Reveal in file explorer, Copy path, Close, Close others, Close tabs below, Close duplicate tabs, Close all, Reopen closed tab, Save open tabs as a set…
 
 ## Commands
 
@@ -114,6 +122,7 @@ Bind any of these to a hotkey in **Settings → Hotkeys**:
 | Go to tab 1–8 / Go to last tab | Jump straight to a tab |
 | Pin or unpin current tab | |
 | Set colour of current tab | Open the colour picker |
+| Rename current tab… | Give the tab its own name in the list |
 | Reopen last closed tab | |
 | Close duplicate tabs | Close extra copies of the same note |
 | Close all unpinned tabs | |
@@ -129,7 +138,7 @@ Bind any of these to a hotkey in **Settings → Hotkeys**:
 
 ## Notes
 
-- Tab colours follow a note when you rename or move it, and are forgotten when you delete it.
+- Tab colours, custom names and your order follow a note when you rename or move it, and are forgotten when you delete it.
 - "Recently closed" only remembers the current session.
 - The pictures above are drawn from the plugin's own stylesheet on a dark theme; your theme's colours may differ.
 

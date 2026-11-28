@@ -21,7 +21,16 @@ import {
 
 const VIEW_TYPE = "vertical-tabs-lite";
 
-type SortBy = "obsidian" | "title" | "recent" | "folder" | "modified";
+type SortBy = "obsidian" | "manual" | "title" | "recent" | "folder" | "modified";
+type GroupBy = "pane" | "folder" | "colour" | "none";
+
+/** A heading in the list and the tabs under it. */
+interface TabGroup {
+  key: string;
+  label: string;
+  tooltip?: string;
+  leaves: WorkspaceLeaf[];
+}
 type TitleSource = "name" | "frontmatter" | "heading";
 type Subtitle = "folder" | "path" | "modified" | "none";
 type CloseButton = "hover" | "always" | "never";
@@ -74,7 +83,11 @@ interface VTSettings {
   // Order & grouping
   sortBy: SortBy;
   pinnedFirst: boolean;
-  groupByPane: boolean;
+  groupBy: GroupBy;
+  /** File paths in the order the user dragged them ("My order"). */
+  manualOrder: string[];
+  /** Custom names for tabs, by file path. */
+  nicknames: Record<string, string>;
   // Behaviour
   middleClickClose: boolean;
   doubleClickNewTab: boolean;
@@ -112,7 +125,9 @@ const DEFAULT_SETTINGS: VTSettings = {
   tabColors: {},
   sortBy: "obsidian",
   pinnedFirst: true,
-  groupByPane: true,
+  groupBy: "pane",
+  manualOrder: [],
+  nicknames: {},
   middleClickClose: true,
   doubleClickNewTab: true,
   confirmCloseAll: true,
@@ -201,7 +216,9 @@ class VerticalTabsView extends ItemView implements HoverParent {
   private filterEl!: HTMLInputElement;
   private newBtnEl!: HTMLElement;
   private query = "";
-  private collapsed = new Set<number>();
+  private collapsed = new Set<string>();
+  /** Path of the tab being dragged in "My order" mode. */
+  private dragPath: string | null = null;
   private closedCollapsed = false;
   /** Keyboard highlight in the list while typing in the filter box (-1 = none). */
   private highlight = -1;
@@ -286,41 +303,91 @@ class VerticalTabsView extends ItemView implements HoverParent {
     return hay.includes(this.query);
   }
 
-  /** Leaves in display order, grouped (or one group when grouping is off). */
-  private orderedGroups(): WorkspaceLeaf[][] {
+  /** Sort one list of tabs according to the "Sort tabs by" setting. */
+  private sortLeaves(visible: WorkspaceLeaf[]): WorkspaceLeaf[] {
     const s = this.plugin.settings;
-    let groups = getGroups(this.app);
-    if (!s.groupByPane) groups = [flatten(groups)];
+    const byTitle = (a: WorkspaceLeaf, b: WorkspaceLeaf) =>
+      this.plugin.titleFor(a).localeCompare(this.plugin.titleFor(b), undefined, { numeric: true });
+    if (s.sortBy === "manual") {
+      const pos = new Map(s.manualOrder.map((p, i) => [p, i] as const));
+      const rank = (l: WorkspaceLeaf) => pos.get(leafFile(l)?.path ?? "") ?? Number.MAX_SAFE_INTEGER;
+      visible.sort((a, b) => rank(a) - rank(b));
+    } else if (s.sortBy === "title") {
+      visible.sort(byTitle);
+    } else if (s.sortBy === "folder") {
+      visible.sort((a, b) => {
+        const fa = leafFile(a)?.parent?.path ?? "";
+        const fb = leafFile(b)?.parent?.path ?? "";
+        return fa.localeCompare(fb, undefined, { numeric: true }) || byTitle(a, b);
+      });
+    } else if (s.sortBy === "modified") {
+      visible.sort((a, b) => (leafFile(b)?.stat.mtime ?? 0) - (leafFile(a)?.stat.mtime ?? 0));
+    } else if (s.sortBy === "recent") {
+      visible.sort((a, b) => this.plugin.lastUsed(b) - this.plugin.lastUsed(a));
+    }
+    if (s.pinnedFirst) {
+      // stable sort keeps the chosen order within pinned / unpinned
+      visible.sort((a, b) => Number(isPinned(b)) - Number(isPinned(a)));
+    }
+    return visible;
+  }
+
+  /** Tabs split into headed groups, following the "Group by" setting. */
+  private orderedGroups(): TabGroup[] {
+    const s = this.plugin.settings;
+    const panes = getGroups(this.app);
+    const all = flatten(panes).filter((l) => this.matches(l));
+    let groups: TabGroup[];
+
+    if (s.groupBy === "pane") {
+      groups = panes.map((leaves, i) => ({
+        key: `pane-${i}`,
+        label: `Pane ${i + 1}`,
+        leaves: leaves.filter((l) => this.matches(l)),
+      }));
+    } else if (s.groupBy === "folder") {
+      const byFolder = new Map<string, WorkspaceLeaf[]>();
+      for (const l of all) {
+        const folder = leafFile(l)?.parent?.path ?? "";
+        const key = folder === "/" ? "" : folder;
+        if (!byFolder.has(key)) byFolder.set(key, []);
+        byFolder.get(key)!.push(l);
+      }
+      groups = [...byFolder.entries()]
+        .sort(([a], [b]) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b, undefined, { numeric: true })))
+        .map(([folder, leaves]) => ({
+          key: `folder-${folder}`,
+          label: folder ? folder.split("/").pop() ?? folder : "Vault root and other",
+          tooltip: folder || undefined,
+          leaves,
+        }));
+    } else if (s.groupBy === "colour") {
+      const byColor = new Map<string, WorkspaceLeaf[]>();
+      for (const l of all) {
+        const f = leafFile(l);
+        const c = f ? this.plugin.colorFor(f) ?? "" : "";
+        if (!byColor.has(c)) byColor.set(c, []);
+        byColor.get(c)!.push(l);
+      }
+      const order: string[] = [...COLORS, ""];
+      groups = order
+        .filter((c) => byColor.has(c))
+        .map((c) => ({
+          key: `colour-${c}`,
+          label: c ? COLOR_LABELS[c as ColorName] : "No colour",
+          leaves: byColor.get(c)!,
+        }));
+    } else {
+      groups = [{ key: "all", label: "", leaves: all }];
+    }
 
     return groups
-      .map((leaves) => {
-        const visible = leaves.filter((l) => this.matches(l));
-        const byTitle = (a: WorkspaceLeaf, b: WorkspaceLeaf) =>
-          this.plugin.titleFor(a).localeCompare(this.plugin.titleFor(b), undefined, { numeric: true });
-        if (s.sortBy === "title") {
-          visible.sort(byTitle);
-        } else if (s.sortBy === "folder") {
-          visible.sort((a, b) => {
-            const fa = leafFile(a)?.parent?.path ?? "";
-            const fb = leafFile(b)?.parent?.path ?? "";
-            return fa.localeCompare(fb, undefined, { numeric: true }) || byTitle(a, b);
-          });
-        } else if (s.sortBy === "modified") {
-          visible.sort((a, b) => (leafFile(b)?.stat.mtime ?? 0) - (leafFile(a)?.stat.mtime ?? 0));
-        } else if (s.sortBy === "recent") {
-          visible.sort((a, b) => this.plugin.lastUsed(b) - this.plugin.lastUsed(a));
-        }
-        if (s.pinnedFirst) {
-          // stable sort keeps the chosen order within pinned / unpinned
-          visible.sort((a, b) => Number(isPinned(b)) - Number(isPinned(a)));
-        }
-        return visible;
-      })
-      .filter((g) => g.length > 0);
+      .map((g) => ({ ...g, leaves: this.sortLeaves(g.leaves) }))
+      .filter((g) => g.leaves.length > 0);
   }
 
   private visibleLeaves(): WorkspaceLeaf[] {
-    return flatten(this.orderedGroups());
+    return flatten(this.orderedGroups().map((g) => g.leaves));
   }
 
   /** Apply settings that only change classes / visibility. */
@@ -364,23 +431,29 @@ class VerticalTabsView extends ItemView implements HoverParent {
 
     const active = this.app.workspace.getMostRecentLeaf();
     const groups = this.orderedGroups();
-    const showHeaders = this.plugin.settings.groupByPane && groups.length > 1;
+    const groupBy = this.plugin.settings.groupBy;
+    // A single pane doesn't need a "Pane 1" heading; other groupings always show theirs.
+    const showHeaders = groupBy !== "none" && (groupBy !== "pane" || groups.length > 1);
 
-    groups.forEach((leaves, gi) => {
-      const isCollapsed = showHeaders && this.collapsed.has(gi) && !this.query;
+    groups.forEach((group) => {
+      const leaves = group.leaves;
+      const isCollapsed = showHeaders && this.collapsed.has(group.key) && !this.query;
       if (showHeaders) {
         const header = this.listEl.createDiv({ cls: "vt-group" });
         header.toggleClass("is-collapsed", isCollapsed);
         const chevron = header.createSpan({ cls: "vt-group-chevron" });
         setIcon(chevron, "chevron-down");
-        header.createSpan({ cls: "vt-group-name", text: `Pane ${gi + 1}` });
+        if (groupBy === "colour" && group.key !== "colour-") {
+          header.createSpan({ cls: `vt-label-dot vt-label-${group.key.slice("colour-".length)}` });
+        }
+        header.createSpan({ cls: "vt-group-name", text: group.label });
         if (this.plugin.settings.showTabCount) {
           header.createSpan({ cls: "vt-group-count", text: String(leaves.length) });
         }
-        setTooltip(header, isCollapsed ? "Expand" : "Collapse");
+        setTooltip(header, `${group.tooltip ? group.tooltip + " · " : ""}${isCollapsed ? "Expand" : "Collapse"}`);
         header.addEventListener("click", () => {
-          if (this.collapsed.has(gi)) this.collapsed.delete(gi);
-          else this.collapsed.add(gi);
+          if (this.collapsed.has(group.key)) this.collapsed.delete(group.key);
+          else this.collapsed.add(group.key);
           this.render();
         });
       }
@@ -503,6 +576,49 @@ class VerticalTabsView extends ItemView implements HoverParent {
       });
     }
     tab.addEventListener("contextmenu", (e) => this.openMenu(e, leaf, pinned, file));
+
+    // "My order": drag tabs to rearrange the list (doesn't change Obsidian's own tab order).
+    if (file && s.sortBy === "manual" && !this.query) {
+      tab.draggable = true;
+      tab.addEventListener("dragstart", (e) => {
+        this.dragPath = file.path;
+        e.dataTransfer?.setData("text/plain", file.path);
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+        tab.addClass("is-dragging");
+      });
+      tab.addEventListener("dragend", () => {
+        this.dragPath = null;
+        tab.removeClass("is-dragging");
+        this.listEl.findAll(".is-drop-target").forEach((el) => el.removeClass("is-drop-target"));
+      });
+      tab.addEventListener("dragover", (e) => {
+        if (!this.dragPath || this.dragPath === file.path) return;
+        e.preventDefault();
+        tab.addClass("is-drop-target");
+      });
+      tab.addEventListener("dragleave", () => tab.removeClass("is-drop-target"));
+      tab.addEventListener("drop", (e) => {
+        e.preventDefault();
+        tab.removeClass("is-drop-target");
+        const from = this.dragPath;
+        this.dragPath = null;
+        if (from && from !== file.path) void this.moveBefore(from, file.path);
+      });
+    }
+  }
+
+  /** Put the dragged tab just before the tab it was dropped on, and remember the order. */
+  private async moveBefore(from: string, to: string) {
+    const shown = this.visibleLeaves()
+      .map((l) => leafFile(l)?.path)
+      .filter((p): p is string => !!p);
+    const order = shown.filter((p) => p !== from);
+    const idx = order.indexOf(to);
+    order.splice(idx < 0 ? order.length : idx, 0, from);
+    // Keep remembered positions of files that aren't open right now, after the open ones.
+    const rest = this.plugin.settings.manualOrder.filter((p) => !order.includes(p));
+    this.plugin.settings.manualOrder = [...order, ...rest].slice(0, 500);
+    await this.plugin.saveSettings();
   }
 
   private openColorMenu(at: { x: number; y: number }, file: TFile) {
@@ -536,6 +652,18 @@ class VerticalTabsView extends ItemView implements HoverParent {
       menu.addItem((i) =>
         i.setTitle("Colour…").setIcon("palette").onClick(() => this.openColorMenu(at, file))
       );
+      menu.addItem((i) =>
+        i.setTitle("Rename tab…").setIcon("pencil").onClick(() =>
+          new NicknameModal(this.app, this.plugin, file).open()
+        )
+      );
+      if (this.plugin.settings.nicknames[file.path]) {
+        menu.addItem((i) =>
+          i.setTitle("Reset tab name").setIcon("rotate-ccw").onClick(() =>
+            void this.plugin.setNickname(file, "")
+          )
+        );
+      }
       menu.addSeparator();
       menu.addItem((i) =>
         i.setTitle("Duplicate tab").setIcon("copy-plus").onClick(() =>
@@ -720,6 +848,8 @@ export default class VerticalTabsPlugin extends Plugin {
     const file = leafFile(leaf);
     if (!file) return leaf.getDisplayText();
     const s = this.settings;
+    const nick = s.nicknames[file.path];
+    if (nick) return nick;
     const cache = this.app.metadataCache.getFileCache(file);
     if (s.titleSource === "frontmatter") {
       const fm: unknown = cache?.frontmatter?.["title"];
@@ -854,6 +984,16 @@ export default class VerticalTabsPlugin extends Plugin {
       callback: () => this.closeAll(),
     });
     this.addCommand({
+      id: "rename-current-tab",
+      name: "Rename current tab…",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file) return false;
+        if (!checking) new NicknameModal(this.app, this, file).open();
+        return true;
+      },
+    });
+    this.addCommand({
       id: "close-duplicate-tabs",
       name: "Close duplicate tabs",
       callback: () => this.closeDuplicates(),
@@ -933,13 +1073,13 @@ export default class VerticalTabsPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on("file-open", refresh));
     this.registerEvent(
       this.app.vault.on("rename", (file: TAbstractFile, oldPath: string) => {
-        void this.moveColor(oldPath, file.path);
+        void this.movePathData(oldPath, file.path);
         refresh();
       })
     );
     this.registerEvent(
       this.app.vault.on("delete", (file: TAbstractFile) => {
-        void this.moveColor(file.path, null);
+        void this.movePathData(file.path, null);
         refresh();
       })
     );
@@ -961,13 +1101,42 @@ export default class VerticalTabsPlugin extends Plugin {
   }
 
   /** Keep a tab's colour when its file is renamed; forget it when deleted. */
-  private async moveColor(from: string, to: string | null) {
-    const color = this.settings.tabColors[from];
-    if (!color) return;
-    const next = { ...this.settings.tabColors };
-    delete next[from];
-    if (to) next[to] = color;
-    this.settings.tabColors = next;
+  /** Keep a tab's colour, custom name and place in "My order" when its file is renamed; forget them when deleted. */
+  private async movePathData(from: string, to: string | null) {
+    const s = this.settings;
+    let changed = false;
+    const color = s.tabColors[from];
+    if (color) {
+      const next = { ...s.tabColors };
+      delete next[from];
+      if (to) next[to] = color;
+      s.tabColors = next;
+      changed = true;
+    }
+    const nick = s.nicknames[from];
+    if (nick) {
+      const next = { ...s.nicknames };
+      delete next[from];
+      if (to) next[to] = nick;
+      s.nicknames = next;
+      changed = true;
+    }
+    const i = s.manualOrder.indexOf(from);
+    if (i >= 0) {
+      s.manualOrder = to
+        ? s.manualOrder.map((p) => (p === from ? to : p))
+        : s.manualOrder.filter((p) => p !== from);
+      changed = true;
+    }
+    if (changed) await this.saveSettings();
+  }
+
+  async setNickname(file: TFile, name: string) {
+    const next = { ...this.settings.nicknames };
+    const clean = name.trim();
+    if (clean && clean !== file.basename) next[file.path] = clean;
+    else delete next[file.path];
+    this.settings.nicknames = next;
     await this.saveSettings();
   }
 
@@ -1045,10 +1214,20 @@ export default class VerticalTabsPlugin extends Plugin {
 
   async loadSettings() {
     const saved = ((await this.loadData()) ?? {}) as Partial<VTSettings> & { showFolder?: boolean };
-    const { showFolder, ...rest } = saved;
+    const { showFolder, groupByPane, ...rest } = saved as typeof saved & { groupByPane?: boolean };
     this.settings = { ...DEFAULT_SETTINGS, ...rest };
     // 0.4.0 and earlier had a "Show folder" toggle; carry it over to "Second line".
     if (rest.subtitle === undefined && showFolder === false) this.settings.subtitle = "none";
+    // 0.6.1 and earlier had a "Group by pane" toggle; carry it over to "Group by".
+    if (rest.groupBy === undefined && groupByPane === false) this.settings.groupBy = "none";
+    this.settings.manualOrder = Array.isArray(this.settings.manualOrder)
+      ? this.settings.manualOrder.filter((x): x is string => typeof x === "string")
+      : [];
+    const nicks: Record<string, string> = {};
+    for (const [path, n] of Object.entries(this.settings.nicknames ?? {})) {
+      if (typeof n === "string" && n.trim()) nicks[path] = n.trim();
+    }
+    this.settings.nicknames = nicks;
     this.settings.textScale = Math.min(130, Math.max(80, Number(this.settings.textScale) || 100));
     this.settings.cornerRadius = Math.min(14, Math.max(0, Number(this.settings.cornerRadius) || 0));
     this.settings.tabLimit = Math.max(0, Math.floor(Number(this.settings.tabLimit) || 0));
@@ -1123,6 +1302,43 @@ class SaveTabSetModal extends Modal {
       .addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
       .addButton((b) => b.setButtonText("Save").setCta().onClick(() => void save()));
     window.setTimeout(() => input?.inputEl.focus(), 0);
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+/** Give a tab its own name in the list, without renaming the file. */
+class NicknameModal extends Modal {
+  private name: string;
+  constructor(app: App, private plugin: VerticalTabsPlugin, private file: TFile) {
+    super(app);
+    this.name = plugin.settings.nicknames[file.path] ?? file.basename;
+  }
+  onOpen() {
+    this.setTitle("Rename tab");
+    let input: TextComponent | null = null;
+    const save = async () => {
+      await this.plugin.setNickname(this.file, this.name);
+      this.close();
+    };
+    new Setting(this.contentEl)
+      .setName("Name in the tab list")
+      .setDesc(`Only changes how the tab is shown here. The file "${this.file.name}" keeps its name. Leave empty to use the file name.`)
+      .addText((t) => {
+        input = t;
+        t.setValue(this.name).onChange((v) => (this.name = v));
+        t.inputEl.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") void save();
+        });
+      });
+    new Setting(this.contentEl)
+      .addButton((b) => b.setButtonText("Cancel").onClick(() => this.close()))
+      .addButton((b) => b.setButtonText("Save").setCta().onClick(() => void save()));
+    window.setTimeout(() => {
+      input?.inputEl.focus();
+      input?.inputEl.select();
+    }, 0);
   }
   onClose() {
     this.contentEl.empty();
@@ -1390,6 +1606,7 @@ class VTSettingTab extends PluginSettingTab {
               key: "sortBy",
               options: {
                 obsidian: "Obsidian's tab order",
+                manual: "My order (drag to rearrange)",
                 title: "Title (A–Z)",
                 folder: "Folder",
                 recent: "Recently used",
@@ -1403,9 +1620,24 @@ class VTSettingTab extends PluginSettingTab {
             control: { type: "toggle", key: "pinnedFirst" },
           },
           {
-            name: "Group by pane",
-            desc: "When the editor is split, show a heading for each pane. Click a heading to collapse it.",
-            control: { type: "toggle", key: "groupByPane" },
+            name: "Group by",
+            desc: "Put tabs under headings. Click a heading to collapse it.",
+            aliases: ["group", "pane", "folder", "colour", "color", "headings"],
+            control: {
+              type: "dropdown",
+              key: "groupBy",
+              options: { pane: "Pane (when the editor is split)", folder: "Folder", colour: "Colour", none: "Nothing" },
+            },
+          },
+          {
+            name: "Forget my order",
+            desc: "Clear the order you dragged tabs into for \"My order\".",
+            visible: () => this.plugin.settings.sortBy === "manual",
+            disabled: () => this.plugin.settings.manualOrder.length === 0,
+            action: () => {
+              this.plugin.settings.manualOrder = [];
+              void this.plugin.saveSettings().then(() => this.update());
+            },
           },
         ],
       },
@@ -1467,10 +1699,10 @@ class VTSettingTab extends PluginSettingTab {
           },
           {
             name: "Reset to defaults",
-            desc: "Restore every option except \"Hide native tab bar\", your tab colours and your saved tab sets.",
+            desc: "Restore every option except \"Hide native tab bar\" and things you've set per tab: colours, names, your order and saved tab sets.",
             action: () => {
-              const { hideNativeTabs, tabColors, tabSets } = this.plugin.settings;
-              this.plugin.settings = { ...DEFAULT_SETTINGS, hideNativeTabs, tabColors, tabSets };
+              const { hideNativeTabs, tabColors, tabSets, nicknames, manualOrder } = this.plugin.settings;
+              this.plugin.settings = { ...DEFAULT_SETTINGS, hideNativeTabs, tabColors, tabSets, nicknames, manualOrder };
               void this.plugin.saveSettings().then(() => this.update());
             },
           },
